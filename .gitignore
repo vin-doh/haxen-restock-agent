@@ -1,0 +1,13 @@
+node_modules/
+# Secrets: keys for the owner wallet and the agent's session never go in Git.
+.env
+.env.*
+!.env.example
+*.key
+secrets/
+# Local state: the ledger database and saved sessions.
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+state/

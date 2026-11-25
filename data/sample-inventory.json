@@ -1,0 +1,19 @@
+{
+  "pharmacy": "Sample Pharmacy (demo data)",
+  "takenAt": "2026-11-25T08:00:00Z",
+  "suppliers": [
+    {
+      "id": "sup_lagos_demo",
+      "name": "Demo Distributor, Lagos",
+      "country": "NG",
+      "currency": "cNGN",
+      "payoutAddress": "0x000000000000000000000000000000000000dEaD",
+      "leadTimeDays": 5
+    }
+  ],
+  "items": [
+    { "sku": "PCM-500-100", "name": "Paracetamol 500mg (100)", "stock": 6, "reorderLevel": 10, "dailySales": 1.5, "supplierId": "sup_lagos_demo", "unitPrice": "1200.00", "packSize": 4 },
+    { "sku": "ORS-SACHET-20", "name": "ORS sachets (20)", "stock": 3, "reorderLevel": 8, "dailySales": 0.8, "supplierId": "sup_lagos_demo", "unitPrice": "900.00", "packSize": 5 },
+    { "sku": "AMX-250-SUSP", "name": "Amoxicillin 250mg suspension", "stock": 40, "reorderLevel": 10, "dailySales": 1.0, "supplierId": "sup_lagos_demo", "unitPrice": "2100.00", "packSize": 6 }
+  ]
+}

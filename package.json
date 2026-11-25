@@ -1,0 +1,26 @@
+{
+  "name": "haxen-restock-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "An agent that restocks a pharmacy and pays its suppliers in their local stablecoin on Celo, from a wallet the owner controls.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --experimental-sqlite \"test/**/*.test.ts\"",
+    "agent": "node --experimental-sqlite src/cli.ts",
+    "check:secrets": "node scripts/check-secrets.ts"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@altananetwork/sdk": "^1.2.0",
+    "@celo/attribution-tags": "^0.5.0",
+    "viem": "^2.58.6"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.4",
+    "typescript": "^5.9.3"
+  }
+}
