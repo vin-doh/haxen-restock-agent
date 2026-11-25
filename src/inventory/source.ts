@@ -59,14 +59,29 @@ export class FileInventorySource implements InventorySource {
   }
 }
 
-/** Calls HaxenMed's restock endpoint: GET {baseUrl}/api/agent/restock with a bearer key. */
+/**
+ * How the agent pays each HaxenMed supplier. Kept on the agent's side (state/suppliers.json, not in Git):
+ * HaxenMed knows stock and suppliers, only the owner knows which wallet each supplier is paid at.
+ */
+export type SupplierWallets = Record<
+  string,
+  { payoutAddress: string; currency: Currency; leadTimeDays: number; country?: string; packSize?: number; packSizes?: Record<string, number> }
+>;
+
+/**
+ * Calls HaxenMed's restock endpoint (GET {baseUrl}/api/agent/restock, bearer key) and joins it with the
+ * owner's supplier wallets. Items whose supplier has no wallet are left out of the plan and reported.
+ */
 export class HaxenMedInventorySource implements InventorySource {
   private readonly baseUrl: string;
   private readonly apiKey: string;
+  private readonly wallets: SupplierWallets;
   private readonly fetchFn: typeof fetch;
-  constructor(baseUrl: string, apiKey: string, fetchFn: typeof fetch = fetch) {
+  skippedItems: string[] = [];
+  constructor(baseUrl: string, apiKey: string, wallets: SupplierWallets, fetchFn: typeof fetch = fetch) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
     this.apiKey = apiKey;
+    this.wallets = wallets;
     this.fetchFn = fetchFn;
   }
   async snapshot(): Promise<InventorySnapshot> {
@@ -75,7 +90,25 @@ export class HaxenMedInventorySource implements InventorySource {
       signal: AbortSignal.timeout(20_000),
     });
     if (!res.ok) throw new Error(`HaxenMed restock endpoint answered ${res.status}`);
-    return validateSnapshot(await res.json());
+    const body = (await res.json()) as { success?: boolean; data?: { pharmacy: string; takenAt: string; items: Array<Record<string, unknown>>; suppliers: Array<{ id: string; name: string }> } };
+    if (!body.success || !body.data) throw new Error("HaxenMed restock endpoint returned no data");
+    const d = body.data;
+    this.skippedItems = [];
+    const suppliers = d.suppliers
+      .filter((s) => this.wallets[s.id])
+      .map((s) => {
+        const w = this.wallets[s.id]!;
+        return { id: s.id, name: s.name, country: w.country ?? "GH", currency: w.currency, payoutAddress: w.payoutAddress, leadTimeDays: w.leadTimeDays };
+      });
+    const items = d.items.filter((i) => {
+      const ok = !!this.wallets[i.supplierId as string];
+      if (!ok) this.skippedItems.push(String(i.name));
+      return ok;
+    }).map((i) => {
+      const w = this.wallets[i.supplierId as string]!;
+      return { ...i, packSize: w.packSizes?.[i.sku as string] ?? w.packSize ?? 1 };
+    });
+    return validateSnapshot({ pharmacy: d.pharmacy, takenAt: d.takenAt, items, suppliers });
   }
 }
 

@@ -1,0 +1,10 @@
+{
+  "HAXENMED_SUPPLIER_ID": {
+    "payoutAddress": "0x000000000000000000000000000000000000dEaD",
+    "currency": "GHSm",
+    "leadTimeDays": 2,
+    "country": "GH",
+    "packSize": 1,
+    "packSizes": { "HAXENMED_DRUG_ID": 4 }
+  }
+}

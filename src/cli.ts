@@ -18,7 +18,10 @@ import { TextileClient } from "./fx/textile.ts";
 import { TextileRail } from "./fx/textile-rail.ts";
 import { MentoRail } from "./fx/mento.ts";
 import { createMentoQuoter } from "./fx/mento-sdk.ts";
-import { FileInventorySource, HaxenMedInventorySource, type InventorySource } from "./inventory/source.ts";
+import { FileInventorySource, HaxenMedInventorySource, type InventorySource, type SupplierWallets } from "./inventory/source.ts";
+import { existsSync, readFileSync } from "node:fs";
+
+const SUPPLIER_WALLETS = "state/suppliers.json";
 import { Ledger } from "./ledger/ledger.ts";
 import { PaymentExecutor, resumeBlocked } from "./payments/executor.ts";
 import { reconcile, viemChainReader } from "./payments/reconcile.ts";
@@ -49,7 +52,8 @@ function inventory(): InventorySource {
   if (values.inventory) return new FileInventorySource(values.inventory);
   if (settings.inventorySource === "haxenmed") {
     if (!settings.haxenmedUrl || !settings.haxenmedApiKey) throw new Error("INVENTORY_SOURCE=haxenmed needs HAXENMED_URL and HAXENMED_API_KEY");
-    return new HaxenMedInventorySource(settings.haxenmedUrl, settings.haxenmedApiKey);
+    if (!existsSync(SUPPLIER_WALLETS)) throw new Error(`INVENTORY_SOURCE=haxenmed needs ${SUPPLIER_WALLETS}: which wallet each HaxenMed supplier is paid at (see data/suppliers.example.json)`);
+    return new HaxenMedInventorySource(settings.haxenmedUrl, settings.haxenmedApiKey, JSON.parse(readFileSync(SUPPLIER_WALLETS, "utf8")) as SupplierWallets);
   }
   return new FileInventorySource("data/sample-inventory.json");
 }
