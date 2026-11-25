@@ -41,7 +41,11 @@ The payment code is built the way a payments backend should be, not like a scrip
 - **Crash recovery that asks, not guesses.** Before each onchain step, the intent is saved. If the agent dies mid-step, the next run asks Textile whether the swap filled, and searches the chain for the supplier transfer. It waits for confirmations before deciding a transfer never happened, so a slow transaction can't cause a double payment.
 - **Reconciliation.** `reconcile` reads every USD₮ and cNGN transfer in and out of the wallet. It books owner deposits and relay fees, matches swaps and payments, and checks every payment carries our attribution tag. Then it compares the ledger's balance with the chain's. Money that left the wallet in a transaction the agent didn't send is booked to a suspense account and flagged as an error.
 
-The tests in `test/` cover each of these, including crashes at every step, the owner's cap stopping a payment mid-way, and an unexplained outflow being caught.
+The tests in `test/` cover each of these against simulated Textile, wallet and chain. They include a crash right after the swap is sent, a crash right after the supplier transfer is sent, a transfer that never lands, the owner's cap stopping a payment mid-way, and an unexplained outflow being caught.
+
+## Status
+
+Built and tested against simulated services. Not yet run on Celo mainnet: the first live payment, wallet address, ERC-8004 agent id and transaction links will be added here when they exist.
 
 ## Onchain details
 

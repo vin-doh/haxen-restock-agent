@@ -11,3 +11,6 @@ secrets/
 *.db-wal
 *.db-shm
 state/
+
+# Private working notes
+submission-draft.md
