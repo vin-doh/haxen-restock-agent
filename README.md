@@ -59,7 +59,7 @@ Built and tested against simulated services. Not yet run on Celo mainnet: the fi
 
 ## Running it
 
-Needs Node 22.13+ (24 recommended).
+Needs Node 22.18+ (24 recommended). TypeScript runs directly on Node, with no build step.
 
 ```sh
 npm install

@@ -5,7 +5,7 @@
   "description": "An agent that restocks a pharmacy and pays its suppliers in their local stablecoin on Celo, from a wallet the owner controls.",
   "type": "module",
   "engines": {
-    "node": ">=22.13"
+    "node": ">=22.18"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
