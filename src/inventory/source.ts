@@ -91,7 +91,7 @@ export function validateSnapshot(raw: unknown): InventorySnapshot {
   const unspendable: string[] = [];
   const suppliers: Supplier[] = (s.suppliers as Record<string, unknown>[]).map((x, i) => {
     if (typeof x.id !== "string" || typeof x.name !== "string") fail(`supplier ${i}: id and name required`);
-    if (x.currency !== "cNGN" && x.currency !== "USDT") fail(`supplier ${x.id}: currency must be cNGN or USDT`);
+    if (x.currency !== "GHSm" && x.currency !== "cNGN" && x.currency !== "USDT") fail(`supplier ${x.id}: currency must be GHSm, cNGN or USDT`);
     if (typeof x.payoutAddress !== "string" || !isAddress(x.payoutAddress)) fail(`supplier ${x.id}: payoutAddress is not an address`);
     if (isUnspendable(x.payoutAddress as string)) unspendable.push(String(x.id));
     if (typeof x.leadTimeDays !== "number" || x.leadTimeDays < 0) fail(`supplier ${x.id}: leadTimeDays`);

@@ -13,7 +13,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
-export type Currency = "USDT" | "cNGN";
+export type Currency = "USDT" | "cNGN" | "GHSm";
 
 export const PAYMENT_STATES = [
   "CREATED",          // order approved, nothing sent yet
@@ -58,6 +58,9 @@ export type Payment = {
   swapTx: string | null;
   payTx: string | null;
   payFromBlock: bigint | null;
+  /** Block the swap was sent after, and the minimum it must deliver: what crash recovery searches the chain for. */
+  swapFromBlock: bigint | null;
+  fxMinOut: bigint | null;
   error: string | null;
   createdAt: string;
   updatedAt: string;
@@ -102,6 +105,8 @@ CREATE TABLE IF NOT EXISTS payments (
   swap_tx TEXT,
   pay_tx TEXT,
   pay_from_block TEXT,
+  swap_from_block TEXT,
+  fx_min_out TEXT,
   error TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -284,7 +289,7 @@ export class Ledger {
     to: PaymentState,
     opts: {
       detail?: string;
-      fields?: Partial<{ usdtSpent: bigint; rfqId: string; rfqClaim: string | null; swapTx: string; payTx: string; payFromBlock: bigint; error: string | null }>;
+      fields?: Partial<{ usdtSpent: bigint; rfqId: string; rfqClaim: string | null; swapTx: string; payTx: string; payFromBlock: bigint; swapFromBlock: bigint; fxMinOut: bigint; error: string | null }>;
       book?: Parameters<Ledger["book"]>[0];
     } = {},
   ): Payment {
@@ -305,6 +310,8 @@ export class Ledger {
       col("swap_tx", f.swapTx?.toLowerCase());
       col("pay_tx", f.payTx?.toLowerCase());
       col("pay_from_block", f.payFromBlock?.toString());
+      col("swap_from_block", f.swapFromBlock?.toString());
+      col("fx_min_out", f.fxMinOut?.toString());
       col("error", f.error === null ? null : f.error);
       const res = this.db
         .prepare(`UPDATE payments SET ${sets.join(", ")} WHERE id = ? AND state = ? AND version = ?`)
@@ -370,6 +377,8 @@ function toPayment(r: Row): Payment {
     swapTx: (r.swap_tx as string | null) ?? null,
     payTx: (r.pay_tx as string | null) ?? null,
     payFromBlock: big(r.pay_from_block),
+    swapFromBlock: big(r.swap_from_block),
+    fxMinOut: big(r.fx_min_out),
     error: (r.error as string | null) ?? null,
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
@@ -381,19 +390,19 @@ function toPayment(r: Row): Payment {
 export const ACCOUNTS = {
   wallet: "assets:agent_wallet",
   ownerEquity: "equity:owner_funding",
-  fxClearing: "clearing:textile_fx",
+  fxClearing: "clearing:fx",
   networkFees: "expenses:network_fees",
   supplier: (supplierId: string) => `expenses:supplier:${supplierId}`,
   unexplained: "suspense:unexplained",
 } as const;
 
-/** USD₮ -> cNGN conversion: each currency balances through the FX clearing account. */
-export function fxConversionPostings(usdtPaid: bigint, cngnReceived: bigint): Posting[] {
+/** USD₮ -> local stablecoin conversion: each currency balances through the FX clearing account. */
+export function fxConversionPostings(usdtPaid: bigint, received: bigint, currency: Exclude<Currency, "USDT"> = "cNGN"): Posting[] {
   return [
     { account: ACCOUNTS.wallet, currency: "USDT", amount: -usdtPaid },
     { account: ACCOUNTS.fxClearing, currency: "USDT", amount: usdtPaid },
-    { account: ACCOUNTS.fxClearing, currency: "cNGN", amount: -cngnReceived },
-    { account: ACCOUNTS.wallet, currency: "cNGN", amount: cngnReceived },
+    { account: ACCOUNTS.fxClearing, currency, amount: -received },
+    { account: ACCOUNTS.wallet, currency, amount: received },
   ];
 }
 

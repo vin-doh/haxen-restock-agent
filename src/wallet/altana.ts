@@ -10,7 +10,7 @@ import {
   isAltanaError,
   type Session,
 } from "@altananetwork/sdk";
-import { createPublicClient, encodeFunctionData, erc20Abi, http, parseAbiItem, type Address, type Hex, type PublicClient } from "viem";
+import { createPublicClient, encodeFunctionData, erc20Abi, http, parseAbiItem, parseEventLogs, type Address, type Hex, type PublicClient } from "viem";
 import { celo } from "viem/chains";
 import { CONTRACTS, TOKENS } from "../config.ts";
 
@@ -42,6 +42,12 @@ export interface AgentWallet {
   /** Finds an ERC-20 Transfer from this wallet to `to` of exactly `amount`, at or after `fromBlock`. */
   findTransfer(token: Address, to: Address, amount: bigint, fromBlock: bigint): Promise<Hex | null>;
   tokenBalance(token: Address): Promise<bigint>;
+  /** Total of `token` that arrived in this wallet within one transaction. */
+  received(token: Address, txHash: Hex): Promise<bigint>;
+  /** Total of `token` that left this wallet within one transaction. */
+  sent(token: Address, txHash: Hex): Promise<bigint>;
+  /** Transactions with a transfer of at least `minAmount` of `token` into this wallet, at or after `fromBlock`. */
+  incomingTxs(token: Address, minAmount: bigint, fromBlock: bigint): Promise<Hex[]>;
 }
 
 export const BLOCKING_CODES = new Set(["spend_limit_exceeded", "call_not_permitted", "session_expired"]);
@@ -112,6 +118,27 @@ export class AltanaAgentWallet implements AgentWallet {
   tokenBalance(token: Address): Promise<bigint> {
     return this.chain.readContract({ address: token, abi: erc20Abi, functionName: "balanceOf", args: [this.address] });
   }
+
+  received(token: Address, txHash: Hex): Promise<bigint> {
+    return this.flow(token, txHash, "in");
+  }
+
+  sent(token: Address, txHash: Hex): Promise<bigint> {
+    return this.flow(token, txHash, "out");
+  }
+
+  async incomingTxs(token: Address, minAmount: bigint, fromBlock: bigint): Promise<Hex[]> {
+    const logs = await this.chain.getLogs({ address: token, event: TRANSFER_EVENT, args: { to: this.address }, fromBlock, toBlock: "latest" });
+    return [...new Set(logs.filter((l) => (l.args.value ?? 0n) >= minAmount).map((l) => l.transactionHash!))];
+  }
+
+  private async flow(token: Address, txHash: Hex, dir: "in" | "out"): Promise<bigint> {
+    const receipt = await this.chain.getTransactionReceipt({ hash: txHash });
+    const me = this.address.toLowerCase();
+    return parseEventLogs({ abi: [TRANSFER_EVENT], logs: receipt.logs, eventName: "Transfer" })
+      .filter((l) => l.address.toLowerCase() === token.toLowerCase() && (dir === "in" ? l.args.to : l.args.from).toLowerCase() === me)
+      .reduce((sum, l) => sum + l.args.value, 0n);
+  }
 }
 
 export const TRANSFER_EVENT = parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 value)");
@@ -122,23 +149,26 @@ export function transferCall(token: Address, to: Address, amount: bigint): Call 
 
 /**
  * The permissions the owner grants the agent. Exactly the calls the restock flow makes:
- *  - approve USD₮ (Textile pulls the quoted amount when the swap settles)
- *  - executeBatch on the Textile reactor (the swap)
- *  - transfer cNGN or USD₮ (paying the supplier)
+ *  - approve USD₮ (the exchange pulls exactly the swap's input)
+ *  - swap on Mento's Router (cedis) or Textile's settlement contracts (naira)
+ *  - transfer GHSm, cNGN or USD₮ (paying the supplier)
  * Caps are per UTC day, in atomic units. The USD₮ cap also pays the relay's fees.
  */
-export function restockPermissions(caps: { usdtPerDay: bigint; cngnPerDay: bigint }) {
-  return {
-    calls: [
-      { signature: "approve(address,uint256)", to: TOKENS.USDT.address },
-      { to: CONTRACTS.textileReactor },
-      { to: CONTRACTS.textileVaultExecutor },
-      { signature: "transfer(address,uint256)", to: TOKENS.cNGN.address },
-      { signature: "transfer(address,uint256)", to: TOKENS.USDT.address },
-    ],
-    spend: [
-      { limit: caps.usdtPerDay, period: "day" as const, token: TOKENS.USDT.address },
-      { limit: caps.cngnPerDay, period: "day" as const, token: TOKENS.cNGN.address },
-    ],
-  };
+export function restockPermissions(caps: { usdtPerDay: bigint; ghsPerDay: bigint; cngnPerDay?: bigint }) {
+  const calls: Array<{ signature?: string; to: Address }> = [
+    { signature: "approve(address,uint256)", to: TOKENS.USDT.address },
+    { to: CONTRACTS.mentoRouter },
+    { signature: "transfer(address,uint256)", to: TOKENS.GHSm.address },
+    { signature: "transfer(address,uint256)", to: TOKENS.USDT.address },
+  ];
+  const spend = [
+    { limit: caps.usdtPerDay, period: "day" as const, token: TOKENS.USDT.address },
+    { limit: caps.ghsPerDay, period: "day" as const, token: TOKENS.GHSm.address },
+  ];
+  // Naira suppliers (via Textile) only when the owner sets a cNGN cap.
+  if (caps.cngnPerDay && caps.cngnPerDay > 0n) {
+    calls.push({ to: CONTRACTS.textileReactor }, { to: CONTRACTS.textileVaultExecutor }, { signature: "transfer(address,uint256)", to: TOKENS.cNGN.address });
+    spend.push({ limit: caps.cngnPerDay, period: "day" as const, token: TOKENS.cNGN.address });
+  }
+  return { calls: calls as Array<{ signature: string; to: Address } | { to: Address }>, spend };
 }

@@ -14,7 +14,7 @@ async function paidScenario() {
   const wallet = new FakeWallet(chain, fx);
   chain.mint("USDT", WALLET, 100_000_000n);
   const ledger = new Ledger(":memory:");
-  const exec = new PaymentExecutor(ledger, wallet, fx.asClient(), { maxUsdtPerOrder: 25_000_000n, maxUsdtPerRun: 50_000_000n });
+  const exec = new PaymentExecutor(ledger, wallet, { cNGN: fx.asRail() }, { maxUsdtPerOrder: 25_000_000n, maxUsdtPerRun: 50_000_000n });
   const order = {
     id: "po_r1",
     supplier: { id: "sup_1", name: "S", country: "NG", currency: "cNGN" as const, payoutAddress: SUPPLIER, leadTimeDays: 5 },

@@ -7,6 +7,8 @@ export const CELO_CHAIN_ID = 42220;
 export const TOKENS = {
   USDT: { symbol: "USDT", address: "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e" as Address, decimals: 6 },
   cNGN: { symbol: "cNGN", address: "0xF6829D7393dAe24509eb1E52eE8e572e2E271a4f" as Address, decimals: 6 },
+  /** Mento Ghanaian Cedi (formerly cGHS). Checked onchain: symbol GHSm, 18 decimals. */
+  GHSm: { symbol: "GHSm", address: "0xfAeA5F3404bbA20D3cc2f8C4B0A888F55a3c7313" as Address, decimals: 18 },
 } as const;
 export type TokenSymbol = keyof typeof TOKENS;
 
@@ -15,6 +17,8 @@ export const CONTRACTS = {
   textileReactor: "0xa9AA0a64769cBed4d3B1Ceb4Df01CdE915C235b3" as Address,
   /** Textile settlement path used when a quote fills from an Operator Vault. */
   textileVaultExecutor: "0x01b006d5c687bde182aa36F542f1f014144742e2" as Address,
+  /** Mento v3 Router (docs.mento.org deployments). USD₮ -> USDm -> GHSm swaps go through it. */
+  mentoRouter: "0x4861840C2EfB2b98312B0aE34d86fD73E8f9B6f6" as Address,
   /** ERC-8004 Identity Registry on Celo mainnet. */
   erc8004Identity: "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432" as Address,
 } as const;

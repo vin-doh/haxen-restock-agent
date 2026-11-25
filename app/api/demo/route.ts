@@ -1,34 +1,36 @@
 // Runs one simulated restock with the agent's real code. Nothing here touches mainnet:
-// the wallet, Textile and the chain are simulators. Only the NGN/USD₮ rate is live
-// (Textile's free indicative preview), so the numbers match today's market.
+// the wallet, Mento and the chain are simulators. Only the cedi rate is live
+// (Mento's own quote for USD₮ -> GHSm on Celo), so the numbers match today's market.
 import { SCENARIOS, runDemo, type Scenario } from "../../../src/sim/demo.ts";
-import { TEXTILE_API, TOKENS } from "../../../src/config.ts";
+import { TOKENS } from "../../../src/config.ts";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 let cachedRate: { value: number; at: number } | null = null;
 
-async function liveRate(): Promise<{ ngnPerUsd: number; live: boolean }> {
-  if (cachedRate && Date.now() - cachedRate.at < 60_000) return { ngnPerUsd: cachedRate.value, live: true };
+async function liveRate(): Promise<{ ghsPerUsd: number; live: boolean }> {
+  if (cachedRate && Date.now() - cachedRate.at < 60_000) return { ghsPerUsd: cachedRate.value, live: true };
   try {
-    const res = await fetch(`${TEXTILE_API}/rfq/preview`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ chainId: 42220, sellToken: TOKENS.USDT.address, buyToken: TOKENS.cNGN.address, buyAmount: "15000000000" }),
-      signal: AbortSignal.timeout(8_000),
-    });
-    const json = (await res.json()) as { data?: { buyAmount?: string; takerPays?: string } };
-    const buy = Number(json.data?.buyAmount);
-    const pays = Number(json.data?.takerPays);
-    if (res.ok && buy > 0 && pays > 0) {
-      cachedRate = { value: buy / pays, at: Date.now() }; // both tokens use 6 decimals
-      return { ngnPerUsd: cachedRate.value, live: true };
+    const { Mento, ChainId } = (await import("@mento-protocol/mento-sdk")) as unknown as {
+      Mento: { create(id: number): Promise<{ quotes: { getAmountOut(a: string, b: string, n: bigint): Promise<bigint> } }> };
+      ChainId: { CELO: number };
+    };
+    const mento = await Mento.create(ChainId.CELO);
+    const tenUsd = 10n * 10n ** 6n;
+    const out = await Promise.race([
+      mento.quotes.getAmountOut(TOKENS.USDT.address, TOKENS.GHSm.address, tenUsd),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 8_000)),
+    ]);
+    const rate = Number(out) / 1e18 / 10; // all-in: Mento's route cost included
+    if (rate > 1 && rate < 1000) {
+      cachedRate = { value: rate, at: Date.now() };
+      return { ghsPerUsd: rate, live: true };
     }
   } catch {
     // fall through to the fixed rate
   }
-  return { ngnPerUsd: 1440, live: false };
+  return { ghsPerUsd: 11.73, live: false };
 }
 
 export async function GET() {
@@ -59,7 +61,7 @@ export async function POST(request: Request) {
     stock,
     maxUsdtPerOrder: num(body.maxUsdtPerOrder, 0, 10_000),
     maxUsdtPerRun: num(body.maxUsdtPerRun, 0, 10_000),
-    ngnPerUsd: rate.ngnPerUsd,
+    ghsPerUsd: rate.ghsPerUsd,
     attributionCode: process.env.ATTRIBUTION_CODE || "celo_3175e01fb588",
   });
   return Response.json({ ...result, rateIsLive: rate.live });

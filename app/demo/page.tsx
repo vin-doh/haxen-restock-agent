@@ -10,8 +10,8 @@ export default function DemoPage() {
     <section>
       <h1 style={{ fontSize: 32, margin: "8px 0 8px", letterSpacing: "-0.02em" }}>Try a restock</h1>
       <p className="lead">
-        This runs the agent's real planner, ledger, payment code and reconciler. The wallet, Textile and the chain are simulated, so
-        no real money moves. The exchange rate is Textile's live price. Pick something to go wrong and watch how the agent handles it.
+        This runs the agent's real planner, ledger, payment code and reconciler. The wallet, Mento and the chain are simulated, so
+        no real money moves. The cedi rate is Mento's live price on Celo. Pick something to go wrong and watch how the agent handles it.
       </p>
       <DemoClient items={items} />
     </section>

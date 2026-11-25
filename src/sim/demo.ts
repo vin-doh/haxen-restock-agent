@@ -8,7 +8,8 @@ import { ACCOUNTS, Ledger, type Payment } from "../ledger/ledger.ts";
 import { PaymentExecutor, resumeBlocked } from "../payments/executor.ts";
 import { reconcile, type Finding } from "../payments/reconcile.ts";
 import { planRestock, type PurchaseOrder } from "../planner.ts";
-import { FakeChain, FakeTextile, FakeWallet, WALLET, type WalletScript } from "./rails.ts";
+import { FakeChain, FakeMento, FakeTextile, FakeWallet, WALLET, type WalletScript } from "./rails.ts";
+import { MentoRail } from "../fx/mento.ts";
 import sample from "../../data/sample-inventory.json" with { type: "json" };
 
 export const SCENARIOS = {
@@ -31,8 +32,8 @@ export type DemoInput = {
   /** Local guards, whole USD₮. */
   maxUsdtPerOrder?: number;
   maxUsdtPerRun?: number;
-  /** NGN per USD₮ to price the simulated swap with (the web route passes Textile's live indicative rate). */
-  ngnPerUsd?: number;
+  /** Cedis per USD₮ to price the simulated swap with (the web route passes Mento's live quote). */
+  ghsPerUsd?: number;
   attributionCode: string;
 };
 
@@ -40,7 +41,7 @@ export type DemoStep = { kind: "plan" | "log" | "chain" | "owner" | "recover" | 
 
 export type DemoResult = {
   scenario: Scenario;
-  ngnPerUsd: number;
+  ghsPerUsd: number;
   orders: Array<{ id: string; supplier: string; total: string; lines: Array<{ name: string; qty: number; reason: string; lineTotal: string }> }>;
   steps: DemoStep[];
   payments: Array<{ id: string; order: string; state: string; amount: string; usdtSpent: string | null; swapTx: string | null; payTx: string | null; error: string | null; events: Array<{ from: string | null; to: string; detail: string | null }> }>;
@@ -64,19 +65,23 @@ export function demoSnapshot(stock: Record<string, number> = {}): InventorySnaps
 export async function runDemo(input: DemoInput): Promise<DemoResult> {
   const steps: DemoStep[] = [];
   const say = (kind: DemoStep["kind"], text: string, tx?: Hex) => steps.push({ kind, text, tx });
-  const ngnPerUsd = Math.round(input.ngnPerUsd && input.ngnPerUsd > 100 && input.ngnPerUsd < 100_000 ? input.ngnPerUsd : 1440);
+  // All-in rate (Mento's route cost included), so the simulator adds no cost of its own.
+  const ghsPerUsd = input.ghsPerUsd && input.ghsPerUsd > 1 && input.ghsPerUsd < 1000 ? input.ghsPerUsd : 11.73;
 
   const chain = new FakeChain();
   const fx = new FakeTextile();
-  fx.rateNgnPerUsd = BigInt(ngnPerUsd);
+  const mento = new FakeMento();
+  mento.ghsPerUsd = ghsPerUsd;
+  mento.costBps = 0n;
   const script: WalletScript =
-    input.scenario === "crash_after_swap" ? { dropAfterSend: 2 }
-    : input.scenario === "crash_after_transfer" ? { dropAfterSend: 3 }
-    : input.scenario === "transfer_lost" ? { failBeforeSend: 3 }
-    : input.scenario === "cap_hit" ? { blockOn: { call: 3, code: "spend_limit_exceeded" } }
+    // Mento: 1st transaction = approve + swap together, 2nd = the supplier payment.
+    input.scenario === "crash_after_swap" ? { dropAfterSend: 1 }
+    : input.scenario === "crash_after_transfer" ? { dropAfterSend: 2 }
+    : input.scenario === "transfer_lost" ? { failBeforeSend: 2 }
+    : input.scenario === "cap_hit" ? { blockOn: { call: 2, code: "spend_limit_exceeded" } }
     : input.scenario === "revoked" ? { blockOn: { call: 1, code: "call_not_permitted" } }
     : {};
-  const wallet = new FakeWallet(chain, fx, script);
+  const wallet = new FakeWallet(chain, fx, script, mento);
   wallet.attributionInput = attributionInput(input.attributionCode);
 
   const ledger = new Ledger(":memory:");
@@ -88,9 +93,9 @@ export async function runDemo(input: DemoInput): Promise<DemoResult> {
     const snapshot = demoSnapshot(input.stock);
     const orders = planRestock(snapshot, { coverDays: 14, day: new Date().toISOString().slice(0, 10) });
     if (!orders.length) say("plan", "Nothing is at or below its reorder point, so there is nothing to order.");
-    for (const o of orders) say("plan", `Planned ${o.id}: ${o.lines.length} line(s) from ${o.supplier.name}, total ${fmt(o.total, "cNGN")}.`);
+    for (const o of orders) say("plan", `Planned ${o.id}: ${o.lines.length} line(s) from ${o.supplier.name}, total ${fmt(o.total, o.supplier.currency)}.`);
 
-    const exec = new PaymentExecutor(ledger, wallet, fx.asClient(), {
+    const exec = new PaymentExecutor(ledger, wallet, { GHSm: new MentoRail(mento, wallet), cNGN: fx.asRail() }, {
       maxUsdtPerOrder: BigInt(Math.round((input.maxUsdtPerOrder ?? 60) * 1e6)),
       maxUsdtPerRun: BigInt(Math.round((input.maxUsdtPerRun ?? 100) * 1e6)),
       settleBlocks: 5n,
@@ -132,12 +137,12 @@ export async function runDemo(input: DemoInput): Promise<DemoResult> {
 
     return {
       scenario: input.scenario,
-      ngnPerUsd,
+      ghsPerUsd,
       orders: orders.map((o) => ({
         id: o.id,
         supplier: o.supplier.name,
-        total: fmt(o.total, "cNGN"),
-        lines: o.lines.map((l) => ({ name: l.name, qty: l.qty, reason: l.reason, lineTotal: fmt(l.lineTotal, "cNGN") })),
+        total: fmt(o.total, o.supplier.currency),
+        lines: o.lines.map((l) => ({ name: l.name, qty: l.qty, reason: l.reason, lineTotal: fmt(l.lineTotal, o.supplier.currency) })),
       })),
       steps,
       payments: ledger.list().map((p) => ({
@@ -156,7 +161,7 @@ export async function runDemo(input: DemoInput): Promise<DemoResult> {
         findings: report.findings,
         balances: report.balances.map((b) => ({ currency: b.currency, ledger: fmt(b.ledger, b.currency), chain: fmt(b.chain, b.currency) })),
       },
-      supplierReceived: fmt(await chain.balance("cNGN", SIM_SUPPLIER), "cNGN"),
+      supplierReceived: fmt(await chain.balance("GHSm", SIM_SUPPLIER), "GHSm"),
       transactionsSent: wallet.calls.length,
     };
   } finally {
@@ -171,7 +176,8 @@ function attributionInput(code: string): Hex {
 }
 
 function fmt(v: bigint, t: keyof typeof TOKENS): string {
-  return `${Number(atomicToWhole(v, TOKENS[t].decimals)).toLocaleString("en-US", { maximumFractionDigits: 6 })} ${t === "USDT" ? "USD₮" : t}`;
+  const n = Number(atomicToWhole(v, TOKENS[t].decimals));
+  return `${n.toLocaleString("en-US", { maximumFractionDigits: t === "USDT" ? 6 : 2 })} ${t === "USDT" ? "USD₮" : t}`;
 }
 
 export { ACCOUNTS };

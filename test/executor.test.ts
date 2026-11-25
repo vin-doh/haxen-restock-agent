@@ -24,7 +24,7 @@ function setup(script: WalletScript = {}, limits = { perOrder: USD(25), perRun: 
   const wallet = new FakeWallet(chain, fx, script);
   chain.mint("USDT", WALLET, USD(100));
   const ledger = new Ledger(":memory:");
-  const exec = new PaymentExecutor(ledger, wallet, fx.asClient(), { maxUsdtPerOrder: limits.perOrder, maxUsdtPerRun: limits.perRun, settleBlocks: 5n });
+  const exec = new PaymentExecutor(ledger, wallet, { cNGN: fx.asRail() }, { maxUsdtPerOrder: limits.perOrder, maxUsdtPerRun: limits.perRun, settleBlocks: 5n });
   return { chain, fx, wallet, ledger, exec };
 }
 

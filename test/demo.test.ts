@@ -6,11 +6,11 @@ const CODE = "celo_3175e01fb588";
 
 for (const scenario of Object.keys(SCENARIOS) as Scenario[]) {
   test(`demo scenario "${scenario}" ends with the supplier paid exactly once (or not at all if revoked) and books matching the chain`, async () => {
-    const r = await runDemo({ scenario, attributionCode: CODE, ngnPerUsd: 1440 });
+    const r = await runDemo({ scenario, attributionCode: CODE, ghsPerUsd: 11.73 });
     assert.ok(r.orders.length >= 1);
     const total = r.orders[0]!.total;
     if (scenario === "revoked") {
-      assert.equal(r.supplierReceived, "0 cNGN");
+      assert.equal(r.supplierReceived, "0 GHSm");
       assert.equal(r.payments[0]!.state, "BLOCKED");
       assert.equal(r.transactionsSent, 0);
     } else {

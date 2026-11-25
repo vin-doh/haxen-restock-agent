@@ -1,9 +1,11 @@
-// Test doubles for the wallet, Textile and the chain. They behave like the real things in the
+// Test doubles for the wallet, Textile, Mento and the chain. They behave like the real things in the
 // ways the payment flow depends on, and let tests inject crashes at exact points.
 import type { Address, Hex } from "viem";
 import { decodeFunctionData, encodeFunctionData, erc20Abi, keccak256, toHex } from "viem";
 import { CONTRACTS, TOKENS, type TokenSymbol } from "../config.ts";
 import type { FirmQuote, RfqStatus, TextileClient } from "../fx/textile.ts";
+import type { MentoQuoter } from "../fx/mento.ts";
+import { TextileRail } from "../fx/textile-rail.ts";
 import type { ChainReader } from "../payments/reconcile.ts";
 import { type AgentWallet, type Call, WalletBlockedError, WalletFailedError } from "../wallet/altana.ts";
 
@@ -13,6 +15,14 @@ export const WALLET = "0x1111111111111111111111111111111111111111" as Address;
 export const SUPPLIER = "0x2222222222222222222222222222222222222222" as Address;
 export const MAKER = "0x3333333333333333333333333333333333333333" as Address;
 export const RELAY = "0x4444444444444444444444444444444444444444" as Address;
+export const POOL = "0x6060606060606060606060606060606060606060" as Address;
+
+export function symbolFor(token: Address): TokenSymbol {
+  const t = token.toLowerCase();
+  const hit = (Object.keys(TOKENS) as TokenSymbol[]).find((k) => TOKENS[k].address.toLowerCase() === t);
+  if (!hit) throw new Error(`unknown token ${token}`);
+  return hit;
+}
 
 type Log = { token: TokenSymbol; txHash: Hex; logIndex: number; from: Address; to: Address; value: bigint; block: bigint };
 
@@ -20,7 +30,7 @@ type Log = { token: TokenSymbol; txHash: Hex; logIndex: number; from: Address; t
 export class FakeChain implements ChainReader {
   block = 100n;
   logs: Log[] = [];
-  balances: Record<TokenSymbol, Map<string, bigint>> = { USDT: new Map(), cNGN: new Map() };
+  balances: Record<TokenSymbol, Map<string, bigint>> = { USDT: new Map(), cNGN: new Map(), GHSm: new Map() };
   inputs = new Map<string, Hex>();
   failed = new Set<string>();
   private n = 1;
@@ -31,7 +41,7 @@ export class FakeChain implements ChainReader {
   move(token: TokenSymbol, from: Address, to: Address, value: bigint, txHash: Hex): void {
     const b = this.balances[token];
     const fb = b.get(from.toLowerCase()) ?? 0n;
-    if (from !== MAKER && fb < value) throw new Error(`insufficient ${token}`);
+    if (from !== MAKER && from !== POOL && fb < value) throw new Error(`insufficient ${token}`);
     b.set(from.toLowerCase(), fb - value);
     b.set(to.toLowerCase(), (b.get(to.toLowerCase()) ?? 0n) + value);
     this.logs.push({ token, txHash, logIndex: this.logs.length, from, to, value, block: this.block });
@@ -72,21 +82,23 @@ export type WalletScript = {
   failBeforeSend?: number;
 };
 
-/** A wallet that applies calls to the FakeChain: approve is a no-op, swaps pull USD₮ and push cNGN, transfers move tokens. */
+/** A wallet that applies calls to the FakeChain: approve is a no-op, swaps pull USD₮ and push the local stablecoin, transfers move tokens. */
 export class FakeWallet implements AgentWallet {
   readonly address = WALLET;
   calls: Array<{ label: string; calls: Call[]; tx: Hex }> = [];
   executeCount = 0;
   private readonly chain: FakeChain;
   private readonly fx: FakeTextile;
+  private readonly mento: FakeMento | null;
   script: WalletScript;
   fee = 10_000n; // 0.01 USD₮ relay fee per tx
   attributionInput: Hex = `0x${"ab".repeat(4)}${Buffer.from("altana,celo_test01").toString("hex")}12${"00"}80218021802180218021802180218021` as Hex;
 
-  constructor(chain: FakeChain, fx: FakeTextile, script: WalletScript = {}) {
+  constructor(chain: FakeChain, fx: FakeTextile, script: WalletScript = {}, mento: FakeMento | null = null) {
     this.chain = chain;
     this.fx = fx;
     this.script = script;
+    this.mento = mento;
   }
 
   async execute(calls: Call[], label: string): Promise<{ txHash: Hex }> {
@@ -102,12 +114,14 @@ export class FakeWallet implements AgentWallet {
         this.chain.move("USDT", WALLET, MAKER, q.takerPays, tx);
         this.chain.move("cNGN", MAKER, WALLET, q.buyAmount, tx);
         this.fx.filled.set(q.rfqId, tx);
-      } else if (c.to.toLowerCase() === TOKENS.cNGN.address.toLowerCase() || c.to.toLowerCase() === TOKENS.USDT.address.toLowerCase()) {
+      } else if (c.to.toLowerCase() === CONTRACTS.mentoRouter.toLowerCase()) {
+        const swap = this.mento?.byData.get(c.data);
+        if (!swap) throw new Error("swap data not from a known Mento quote");
+        this.chain.move("USDT", WALLET, POOL, swap.amountIn, tx);
+        this.chain.move(symbolFor(swap.tokenOut), POOL, WALLET, swap.expectedOut, tx);
+      } else {
         const d = decodeFunctionData({ abi: erc20Abi, data: c.data });
-        if (d.functionName === "transfer") {
-          const token: TokenSymbol = c.to.toLowerCase() === TOKENS.cNGN.address.toLowerCase() ? "cNGN" : "USDT";
-          this.chain.move(token, WALLET, d.args[0] as Address, d.args[1] as bigint, tx);
-        }
+        if (d.functionName === "transfer") this.chain.move(symbolFor(c.to), WALLET, d.args[0] as Address, d.args[1] as bigint, tx);
       }
     }
     this.chain.move("USDT", WALLET, RELAY, this.fee, tx);
@@ -121,12 +135,49 @@ export class FakeWallet implements AgentWallet {
     return this.chain.blockNumber();
   }
   async findTransfer(token: Address, to: Address, amount: bigint, fromBlock: bigint) {
-    const sym: TokenSymbol = token.toLowerCase() === TOKENS.cNGN.address.toLowerCase() ? "cNGN" : "USDT";
+    const sym = symbolFor(token);
     const hit = this.chain.logs.find((l) => l.token === sym && l.from === WALLET && l.to.toLowerCase() === to.toLowerCase() && l.value === amount && l.block >= fromBlock);
     return hit?.txHash ?? null;
   }
   tokenBalance(token: Address) {
-    return this.chain.balance(token.toLowerCase() === TOKENS.cNGN.address.toLowerCase() ? "cNGN" : "USDT", WALLET);
+    return this.chain.balance(symbolFor(token), WALLET);
+  }
+  async received(token: Address, txHash: Hex) {
+    const sym = symbolFor(token);
+    return this.chain.logs.filter((l) => l.token === sym && l.txHash === txHash && l.to === WALLET).reduce((a, l) => a + l.value, 0n);
+  }
+  async sent(token: Address, txHash: Hex) {
+    const sym = symbolFor(token);
+    return this.chain.logs.filter((l) => l.token === sym && l.txHash === txHash && l.from === WALLET).reduce((a, l) => a + l.value, 0n);
+  }
+  async incomingTxs(token: Address, minAmount: bigint, fromBlock: bigint) {
+    const sym = symbolFor(token);
+    return [...new Set(this.chain.logs.filter((l) => l.token === sym && l.to === WALLET && l.value >= minAmount && l.block >= fromBlock).map((l) => l.txHash))];
+  }
+}
+
+/** Mento stand-in: a fixed USD₮ -> cedi rate minus a route cost (1% by default), exact-input swaps through the Router address. */
+export class FakeMento implements MentoQuoter {
+  ghsPerUsd = 11.85;
+  /** Route cost in basis points. Set to 0 when ghsPerUsd is already an all-in rate from a live quote. */
+  costBps = 100n;
+  byData = new Map<string, { amountIn: bigint; tokenOut: Address; expectedOut: bigint }>();
+  routeAvailable = true;
+  routerTarget: Address = CONTRACTS.mentoRouter;
+  private n = 0;
+
+  async amountOut(_tokenIn: Address, tokenOut: Address, amountIn: bigint) {
+    if (!this.routeAvailable) throw new Error("no route");
+    const outDecimals = TOKENS[symbolFor(tokenOut)].decimals;
+    const rate = BigInt(Math.round(this.ghsPerUsd * 1_000_000)); // 6-decimal fixed point
+    return (amountIn * rate * 10n ** BigInt(outDecimals) * (10_000n - this.costBps)) / (10n ** 6n * 10n ** 6n * 10_000n);
+  }
+  async buildSwap(p: { tokenIn: Address; tokenOut: Address; amountIn: bigint; recipient: Address; slippagePct: number; deadlineSec: bigint }) {
+    const expectedOut = await this.amountOut(p.tokenIn, p.tokenOut, p.amountIn);
+    const amountOutMin = (expectedOut * BigInt(Math.round((100 - p.slippagePct) * 100))) / 10_000n;
+    const data = `0x3375aa2a${keccak256(toHex(`mento-sim:${this.n++}`)).slice(2)}` as Hex;
+    this.byData.set(data, { amountIn: p.amountIn, tokenOut: p.tokenOut, expectedOut });
+    return { to: this.routerTarget, data, amountOutMin, expectedOut };
   }
 }
 
@@ -182,5 +233,8 @@ export class FakeTextile {
   }
   asClient(): TextileClient {
     return this as unknown as TextileClient;
+  }
+  asRail(): TextileRail {
+    return new TextileRail(this.asClient());
   }
 }

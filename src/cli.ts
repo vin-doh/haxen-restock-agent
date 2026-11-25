@@ -4,7 +4,7 @@
 //   run [--yes]                Plan, then pay each order. Without --yes it stops before sending.
 //   status                     Payments, their history, and the ledger's balances.
 //   reconcile [--from-block N] Match the ledger against the chain and report differences.
-//   owner:grant --usdt-per-day N --cngn-per-day N [--days N]   Grant the agent its session key.
+//   owner:grant --usdt-per-day N --ghs-per-day N [--cngn-per-day N] [--days N]   Grant the agent its session key.
 //   owner:revoke               Revoke the agent's session key in one transaction.
 //   owner:identity             Register (or re-register) the agent's ERC-8004 identity.
 //   owner:resume <paymentId>   Put a BLOCKED payment back in line.
@@ -13,6 +13,9 @@ import { privateKeyToAccount } from "viem/accounts";
 import { TOKENS, atomicToWhole, readSettings, requireKey, wholeToAtomic } from "./config.ts";
 import { loadDotEnv } from "./env.ts";
 import { TextileClient } from "./fx/textile.ts";
+import { TextileRail } from "./fx/textile-rail.ts";
+import { MentoRail } from "./fx/mento.ts";
+import { createMentoQuoter } from "./fx/mento-sdk.ts";
 import { FileInventorySource, HaxenMedInventorySource, type InventorySource } from "./inventory/source.ts";
 import { Ledger } from "./ledger/ledger.ts";
 import { PaymentExecutor, resumeBlocked } from "./payments/executor.ts";
@@ -30,6 +33,7 @@ const { values, positionals } = parseArgs({
     yes: { type: "boolean", default: false },
     "from-block": { type: "string" },
     "usdt-per-day": { type: "string" },
+    "ghs-per-day": { type: "string" },
     "cngn-per-day": { type: "string" },
     days: { type: "string", default: "14" },
     "cover-days": { type: "string", default: "14" },
@@ -86,7 +90,9 @@ async function main(): Promise<void> {
         const wallet = new AltanaAgentWallet(session, makeAltanaClient(settings.attributionCode), makePublicClient(settings.rpcUrl));
         const ownerKey = process.env.OWNER_PRIVATE_KEY;
         const fx = new TextileClient({ signProof: ownerKey ? ownerProofSigner(requireKey("OWNER_PRIVATE_KEY")) : undefined });
-        const exec = new PaymentExecutor(ledger, wallet, fx, { maxUsdtPerOrder: settings.maxUsdtPerOrder, maxUsdtPerRun: settings.maxUsdtPerRun, log });
+        // Cedis through Mento; naira through Textile.
+        const rails = { GHSm: new MentoRail(await createMentoQuoter(), wallet), cNGN: new TextileRail(fx) };
+        const exec = new PaymentExecutor(ledger, wallet, rails, { maxUsdtPerOrder: settings.maxUsdtPerOrder, maxUsdtPerRun: settings.maxUsdtPerRun, log });
         // Finish anything an earlier run left half-done before starting new orders.
         for (const p of ledger.list(["QUOTED", "SWAP_SUBMITTING", "SWAPPED", "PAY_SUBMITTING"])) {
           const r = await exec.advance(p);
@@ -140,14 +146,15 @@ async function main(): Promise<void> {
     }
 
     case "owner:grant": {
-      if (!values["usdt-per-day"] || !values["cngn-per-day"]) throw new Error("Give the daily caps: --usdt-per-day 30 --cngn-per-day 40000");
+      if (!values["usdt-per-day"] || !values["ghs-per-day"]) throw new Error("Give the daily caps: --usdt-per-day 30 --ghs-per-day 300 (add --cngn-per-day N only for naira suppliers)");
       const ownerKey = requireKey("OWNER_PRIVATE_KEY");
       log(`Owner wallet: ${privateKeyToAccount(ownerKey).address}`);
       await grantAgentSession({
         ownerKey,
         attributionCode: settings.attributionCode,
         usdtPerDay: wholeToAtomic(values["usdt-per-day"], 6),
-        cngnPerDay: wholeToAtomic(values["cngn-per-day"], 6),
+        ghsPerDay: wholeToAtomic(values["ghs-per-day"], 18),
+        cngnPerDay: values["cngn-per-day"] ? wholeToAtomic(values["cngn-per-day"], 6) : undefined,
         days: Number(values.days),
         sessionPath: settings.sessionPath,
         log,

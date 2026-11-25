@@ -26,7 +26,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <main className="wrap">{children}</main>
         <footer>
           <div className="wrap">
-            Built by HaxenTech for Agents Open for Business (Celo × Loops House), with Textile FX and Altana. Source:{" "}
+            Built by HaxenTech for Agents Open for Business (Celo × Loops House), with Altana and Mento. Source:{" "}
             <a href={REPO}>github.com/vin-doh/haxen-restock-agent</a>.
           </div>
         </footer>

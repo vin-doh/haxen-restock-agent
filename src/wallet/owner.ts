@@ -20,7 +20,9 @@ export async function grantAgentSession(p: {
   ownerKey: Hex;
   attributionCode: string;
   usdtPerDay: bigint;
-  cngnPerDay: bigint;
+  ghsPerDay: bigint;
+  /** Only for naira suppliers via Textile. Leave out to keep Textile off the allowlist. */
+  cngnPerDay?: bigint;
   days: number;
   sessionPath: string;
   envPath?: string;
@@ -35,7 +37,7 @@ export async function grantAgentSession(p: {
   const result = await client.grantSession({
     wallet,
     signer,
-    permissions: restockPermissions({ usdtPerDay: p.usdtPerDay, cngnPerDay: p.cngnPerDay }),
+    permissions: restockPermissions({ usdtPerDay: p.usdtPerDay, ghsPerDay: p.ghsPerDay, cngnPerDay: p.cngnPerDay }),
     expiry: Math.floor(Date.now() / 1000) + p.days * 24 * 3600,
     sessionSigner: signerFromPrivateKey(sessionKey),
     feeToken: TOKENS.USDT.address,

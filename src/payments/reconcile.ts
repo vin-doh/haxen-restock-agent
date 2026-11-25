@@ -14,6 +14,9 @@ import { TOKENS, atomicToWhole, type TokenSymbol } from "../config.ts";
 import { ACCOUNTS, type Currency, type Ledger } from "../ledger/ledger.ts";
 import { TRANSFER_EVENT } from "../wallet/altana.ts";
 
+/** Every token the agent can hold or pay with. */
+export const TRACKED = ["USDT", "GHSm", "cNGN"] as const;
+
 export type Finding = { level: "ok" | "warn" | "error"; message: string };
 
 export type ReconcileReport = {
@@ -99,7 +102,8 @@ export async function reconcile(ledger: Ledger, chain: ChainReader, wallet: Addr
   const payByTx = new Map(payments.filter((p) => p.payTx).map((p) => [p.payTx!, p]));
   const w = wallet.toLowerCase();
 
-  const logs = [...(await chain.transfers("USDT", wallet, fromBlock, toBlock)), ...(await chain.transfers("cNGN", wallet, fromBlock, toBlock))];
+  const logs: TransferLog[] = [];
+  for (const t of TRACKED) logs.push(...(await chain.transfers(t, wallet, fromBlock, toBlock)));
   // A self-transfer appears in both the from and to queries; keep one copy of each log.
   const seen = new Set<string>();
   const unique = logs.filter((l) => {
@@ -211,7 +215,7 @@ export async function reconcile(ledger: Ledger, chain: ChainReader, wallet: Addr
 
   // Ledger vs chain, per currency.
   const balances: ReconcileReport["balances"] = [];
-  for (const cur of ["USDT", "cNGN"] as const) {
+  for (const cur of TRACKED) {
     const l = ledger.balance(ACCOUNTS.wallet, cur);
     const c = await chain.balance(cur, wallet);
     balances.push({ currency: cur, ledger: l, chain: c });

@@ -6,7 +6,7 @@ type Item = { sku: string; name: string; stock: number; reorderLevel: number; da
 type Finding = { level: "ok" | "warn" | "error"; message: string };
 type Result = {
   scenario: string;
-  ngnPerUsd: number;
+  ghsPerUsd: number;
   rateIsLive: boolean;
   orders: Array<{ id: string; supplier: string; total: string; lines: Array<{ name: string; qty: number; reason: string; lineTotal: string }> }>;
   steps: Array<{ kind: string; text: string; tx?: string }>;
@@ -20,7 +20,7 @@ type Result = {
 
 const SCENARIOS: Array<[string, string, string]> = [
   ["normal", "Everything works", "Quote, approve, swap, pay, reconcile."],
-  ["crash_after_swap", "Connection drops after the swap", "Did the swap happen? The agent asks Textile instead of guessing."],
+  ["crash_after_swap", "Connection drops after the swap", "Did the swap happen? The agent checks the chain instead of guessing."],
   ["crash_after_transfer", "Connection drops after paying", "The agent finds the transfer onchain and does not pay again."],
   ["transfer_lost", "The payment never lands", "The agent waits for confirmations, sees nothing, then pays once."],
   ["cap_hit", "Owner's daily cap too small", "The chain refuses; the payment stops until the owner acts."],
@@ -36,7 +36,7 @@ export default function DemoClient({ items }: { items: Item[] }) {
   const [stock, setStock] = useState<Record<string, number>>(Object.fromEntries(items.map((i) => [i.sku, i.stock])));
   const [perOrder, setPerOrder] = useState(60);
   const [perRun, setPerRun] = useState(100);
-  const [rate, setRate] = useState<{ ngnPerUsd: number; live: boolean } | null>(null);
+  const [rate, setRate] = useState<{ ghsPerUsd: number; live: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -44,7 +44,7 @@ export default function DemoClient({ items }: { items: Item[] }) {
   useEffect(() => {
     fetch("/api/demo")
       .then((r) => r.json())
-      .then((d) => setRate({ ngnPerUsd: d.ngnPerUsd, live: d.live }))
+      .then((d) => setRate({ ghsPerUsd: d.ghsPerUsd, live: d.live }))
       .catch(() => setRate(null));
   }, []);
 
@@ -111,9 +111,9 @@ export default function DemoClient({ items }: { items: Item[] }) {
 
         <p style={{ fontSize: 13, color: "var(--muted)", margin: "14px 0" }}>
           {rate ? (
-            <>Priced at {rate.live ? "Textile's live rate" : "a fixed fallback rate"}: ₦{rate.ngnPerUsd.toLocaleString("en-US", { maximumFractionDigits: 2 })} per USD₮.</>
+            <>Priced at {rate.live ? "Mento's live rate" : "a fixed fallback rate"}: GH₵{rate.ghsPerUsd.toLocaleString("en-US", { maximumFractionDigits: 2 })} per USD₮.</>
           ) : (
-            "Fetching Textile's live rate…"
+            "Fetching Mento's live rate…"
           )}
         </p>
         <button className="btn btn-primary" style={{ width: "100%", justifyContent: "center" }} onClick={run} disabled={busy}>
@@ -178,7 +178,7 @@ function ResultView({ r }: { r: Result }) {
             ))}
           </div>
           <p style={{ margin: "6px 0", color: "var(--muted)", fontSize: 14 }}>
-            {p.amount} to the supplier{p.usdtSpent ? `, paid for with ${p.usdtSpent}` : ""}.
+            {p.amount} to the supplier{p.usdtSpent ? (p.swapTx ? `, paid for with ${p.usdtSpent}` : `; quoted at ${p.usdtSpent}, nothing spent`) : ""}.
             {p.error ? <> Stopped because: {p.error}</> : null}
           </p>
         </div>

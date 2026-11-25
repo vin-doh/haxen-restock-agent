@@ -1,20 +1,16 @@
 // Pays a purchase order end to end, one recorded step at a time:
 //   CREATED -> QUOTED -> SWAP_SUBMITTING -> SWAPPED -> PAY_SUBMITTING -> PAID
 //
-// Before anything is sent, the step's intent is saved. If the process dies mid-step,
-// the next run asks the outside world what actually happened (Textile's RFQ status for
-// the swap, the chain's Transfer logs for the payment) instead of guessing, so a crash
-// can delay a payment but never pay a supplier twice.
+// The swap goes through the FX rail for the supplier's currency: Mento for Ghana cedis (GHSm),
+// Textile FX for naira (cNGN). Suppliers paid in USD₮ need no swap.
+//
+// Before anything is sent, the step's intent is saved. If the process dies mid-step, the next
+// run asks the outside world what actually happened (the venue, or the chain's Transfer logs)
+// instead of guessing, so a crash can delay a payment but never pay a supplier twice.
 import type { Address, Hex } from "viem";
-import { CONTRACTS, TOKENS, atomicToWhole } from "../config.ts";
-import { type FirmQuote, NoQuoteError, type TextileClient } from "../fx/textile.ts";
-import {
-  type Ledger,
-  type Payment,
-  StaleStateError,
-  fxConversionPostings,
-  supplierPaymentPostings,
-} from "../ledger/ledger.ts";
+import { TOKENS, atomicToWhole } from "../config.ts";
+import { type FxPlan, type FxRail, NoRouteError } from "../fx/rail.ts";
+import { type Currency, type Ledger, type Payment, StaleStateError, fxConversionPostings, supplierPaymentPostings } from "../ledger/ledger.ts";
 import type { PurchaseOrder } from "../planner.ts";
 import { isUnspendable } from "../inventory/source.ts";
 import { type AgentWallet, WalletBlockedError, WalletFailedError, transferCall } from "../wallet/altana.ts";
@@ -22,7 +18,7 @@ import { type AgentWallet, WalletBlockedError, WalletFailedError, transferCall }
 export type ExecutorOptions = {
   maxUsdtPerOrder: bigint;
   maxUsdtPerRun: bigint;
-  /** Don't send a swap with less than this left on the quote. */
+  /** Don't send a swap with less than this left on its quote. */
   minQuoteMsLeft?: number;
   /** Blocks to wait before deciding an unseen transfer never happened. */
   settleBlocks?: bigint;
@@ -30,20 +26,19 @@ export type ExecutorOptions = {
 };
 
 export type Outcome = { payment: Payment; note: string };
-
-const TEXTILE_TARGETS = new Set([CONTRACTS.textileReactor.toLowerCase(), CONTRACTS.textileVaultExecutor.toLowerCase()]);
+export type Rails = Partial<Record<Exclude<Currency, "USDT">, FxRail>>;
 
 export class PaymentExecutor {
   private readonly ledger: Ledger;
   private readonly wallet: AgentWallet;
-  private readonly fx: TextileClient;
+  private readonly rails: Rails;
   private readonly opts: Required<Omit<ExecutorOptions, "log">> & { log: (line: string) => void };
   private spentThisRun = 0n;
 
-  constructor(ledger: Ledger, wallet: AgentWallet, fx: TextileClient, opts: ExecutorOptions) {
+  constructor(ledger: Ledger, wallet: AgentWallet, rails: Rails, opts: ExecutorOptions) {
     this.ledger = ledger;
     this.wallet = wallet;
-    this.fx = fx;
+    this.rails = rails;
     this.opts = { minQuoteMsLeft: 15_000, settleBlocks: 30n, log: () => {}, ...opts };
   }
 
@@ -94,7 +89,7 @@ export class PaymentExecutor {
           }
           case "PAID":
           case "RECONCILED":
-            return { payment: p, note: "paid" };
+            return { payment: p, note: "" };
           case "BLOCKED":
             return { payment: p, note: `blocked by the owner's limits: ${p.error}` };
           case "FAILED":
@@ -116,106 +111,122 @@ export class PaymentExecutor {
 
   // ---------- steps ----------
 
+  private rail(p: Payment): FxRail {
+    const rail = p.currency === "USDT" ? undefined : this.rails[p.currency];
+    if (!rail) throw new Error(`No FX rail configured for ${p.currency}`);
+    return rail;
+  }
+
   private async fromCreated(p: Payment): Promise<{ payment: Payment; stop?: boolean; note: string }> {
     if (p.currency === "USDT") {
       this.checkBudget(p.amount, p);
       return { payment: this.ledger.transition(p, "SWAPPED", { detail: "supplier is paid in USD₮; no conversion", fields: { usdtSpent: p.amount } }), note: "" };
     }
 
-    let quote: FirmQuote;
+    const rail = this.rail(p);
+    let plan: FxPlan;
     try {
-      quote = await this.fx.firmQuoteForExactOutput({
-        taker: this.wallet.address,
-        sellToken: TOKENS.USDT.address,
-        buyToken: TOKENS[p.currency].address,
-        buyAmount: p.amount,
-      });
+      plan = await rail.planExactOut({ taker: this.wallet.address, buyToken: TOKENS[p.currency].address, buyAmount: p.amount });
     } catch (e) {
-      if (e instanceof NoQuoteError) return { payment: p, stop: true, note: `no quote from Textile (${e.reason}); will retry next run` };
+      if (e instanceof NoRouteError) return { payment: p, stop: true, note: `no ${rail.name} quote (${e.reason}); will retry next run` };
       throw e;
     }
-    const usd = atomicToWhole(quote.takerPays, TOKENS.USDT.decimals);
-    this.opts.log(`${p.purchaseOrderId}: quote ${quote.rfqId}: ${usd} USD₮ -> ${atomicToWhole(quote.buyAmount, TOKENS[p.currency].decimals)} ${p.currency}`);
+    const cur = TOKENS[p.currency];
+    this.opts.log(`${p.purchaseOrderId}: ${rail.name} quote ${plan.ref}: ${atomicToWhole(plan.usdtIn, 6)} USD₮ -> at least ${atomicToWhole(plan.minOut, cur.decimals)} ${p.currency}`);
 
     try {
-      this.checkBudget(quote.takerPays, p);
+      this.checkBudget(plan.usdtIn, p);
     } catch (e) {
-      await this.fx.cancel(quote.rfqId, quote.claimToken).catch(() => {});
+      await rail.release(plan.ref, plan.claim);
       throw e;
     }
-    if (!TEXTILE_TARGETS.has(quote.swap.to.toLowerCase())) {
-      await this.fx.cancel(quote.rfqId, quote.claimToken).catch(() => {});
-      const failed = this.ledger.transition(p, "FAILED", { detail: "unexpected swap target", fields: { error: `Textile swap targets unknown contract ${quote.swap.to}` } });
+    if (plan.minOut < p.amount) {
+      await rail.release(plan.ref, plan.claim);
+      const failed = this.ledger.transition(p, "FAILED", { detail: "quote short", fields: { error: `${rail.name} plan guarantees ${plan.minOut}, less than the ${p.amount} owed` } });
+      return { payment: failed, stop: true, note: "refused: the swap would not cover the invoice" };
+    }
+    const unknown = plan.txs.flatMap((t) => t.calls).find((c) => !rail.knownTargets.has(c.to.toLowerCase()));
+    if (unknown) {
+      await rail.release(plan.ref, plan.claim);
+      const failed = this.ledger.transition(p, "FAILED", { detail: "unexpected swap target", fields: { error: `${rail.name} swap calls unknown contract ${unknown.to}` } });
       return { payment: failed, stop: true, note: "refused: swap goes to an unknown contract" };
     }
 
-    let q = this.ledger.transition(p, "QUOTED", { detail: quote.rfqId, fields: { rfqId: quote.rfqId, rfqClaim: quote.claimToken, usdtSpent: quote.takerPays } });
-    if (this.fx.msLeft(quote) < this.opts.minQuoteMsLeft) {
-      await this.fx.cancel(quote.rfqId, quote.claimToken).catch(() => {});
+    let q = this.ledger.transition(p, "QUOTED", {
+      detail: `${rail.name} ${plan.ref}`,
+      fields: { rfqId: plan.ref, rfqClaim: plan.claim, usdtSpent: plan.usdtIn, fxMinOut: plan.minOut },
+    });
+    if (rail.msLeft(plan) < this.opts.minQuoteMsLeft) {
+      await rail.release(plan.ref, plan.claim);
       q = this.ledger.transition(q, "CREATED", { detail: "quote too close to expiry", fields: { rfqClaim: null } });
       return { payment: q, stop: true, note: "quote expired before it could be used; will retry" };
     }
-    return { payment: await this.swap(q, quote), note: "" };
+    return { payment: await this.swap(q, rail, plan), note: "" };
   }
 
-  private async swap(p: Payment, quote: FirmQuote): Promise<Payment> {
-    const submitting = this.ledger.transition(p, "SWAP_SUBMITTING", { detail: `takerPays ${quote.takerPays}` });
+  private async swap(p: Payment, rail: FxRail, plan: FxPlan): Promise<Payment> {
+    const fromBlock = await this.wallet.blockNumber();
+    const submitting = this.ledger.transition(p, "SWAP_SUBMITTING", { detail: `usdtIn ${plan.usdtIn}`, fields: { swapFromBlock: fromBlock } });
     try {
-      // Approval must confirm before the swap (Textile's rule), so they go as two transactions.
-      const approve = await this.wallet.execute([{ to: quote.approval.to, data: quote.approval.data }], "approve USD₮ for Textile");
-      this.ledger.recordWalletTx(approve.txHash, "approve", p.id);
-      if (this.fx.msLeft(quote) <= 0) throw new WalletFailedError("quote expired while the approval confirmed");
-      const { txHash } = await this.wallet.execute([{ to: quote.swap.to, data: quote.swap.data }], "Textile swap");
-      this.ledger.recordWalletTx(txHash, "swap", p.id);
-      await this.fx.submit(quote.rfqId, quote.claimToken, txHash).catch(() => {});
-      this.opts.log(`${p.purchaseOrderId}: swapped in ${txHash}`);
+      let txHash: Hex | undefined;
+      for (const [i, tx] of plan.txs.entries()) {
+        if (i > 0 && rail.msLeft(plan) <= 0) throw new WalletFailedError("quote expired between transactions");
+        const sent = await this.wallet.execute(tx.calls, tx.label);
+        this.ledger.recordWalletTx(sent.txHash, i === plan.txs.length - 1 ? "swap" : "approve", p.id);
+        txHash = sent.txHash;
+      }
+      const { out } = await rail.settled(plan, txHash!);
+      this.opts.log(`${p.purchaseOrderId}: swapped in ${txHash}, received ${atomicToWhole(out, TOKENS[p.currency].decimals)} ${p.currency}`);
       return this.ledger.transition(submitting, "SWAPPED", {
         detail: txHash,
-        fields: { swapTx: txHash, rfqClaim: null },
-        book: { kind: "fx_conversion", txHash, postings: fxConversionPostings(quote.takerPays, quote.buyAmount), memo: `Textile ${quote.rfqId}` },
+        fields: { swapTx: txHash!, rfqClaim: null },
+        book: { kind: "fx_conversion", txHash: txHash!, postings: fxConversionPostings(plan.usdtIn, out, p.currency as Exclude<Currency, "USDT">), memo: `${rail.name} ${plan.ref}` },
       });
     } catch (e) {
       if (e instanceof WalletBlockedError) {
-        // The chain refused before anything was sent: release the quote so the maker isn't left holding it.
-        await this.fx.cancel(quote.rfqId, quote.claimToken).catch(() => {});
+        // The chain refused before anything was sent: release the quote so it isn't left reserved.
+        await rail.release(plan.ref, plan.claim);
         throw e;
       }
-      // We don't know for sure whether the swap landed; recovery asks Textile.
-      this.opts.log(`${p.purchaseOrderId}: swap did not confirm (${(e as Error).message}); checking with Textile`);
-      const r = await this.recoverSwap(submitting, quote.claimToken, quote);
-      return r.payment;
+      // We don't know for sure whether the swap landed; recovery asks the venue or the chain.
+      this.opts.log(`${p.purchaseOrderId}: swap did not confirm (${(e as Error).message}); checking what happened`);
+      return (await this.recoverSwap(this.ledger.get(p.id)!)).payment;
     }
   }
 
-  private async recoverSwap(p: Payment, claim?: string, quote?: FirmQuote): Promise<{ payment: Payment; stop?: boolean; note: string }> {
-    const claimToken = claim ?? this.ledger.rfqClaim(p.id);
-    if (!p.rfqId || !claimToken) {
-      const failed = this.ledger.transition(p, "FAILED", { detail: "cannot recover swap", fields: { error: "swap state lost its RFQ id or claim token; check the wallet by hand" } });
+  private async recoverSwap(p: Payment): Promise<{ payment: Payment; stop?: boolean; note: string }> {
+    const rail = this.rail(p);
+    const claim = this.ledger.rfqClaim(p.id);
+    if (!p.rfqId || p.usdtSpent === null || p.fxMinOut === null || p.swapFromBlock === null) {
+      const failed = this.ledger.transition(p, "FAILED", { detail: "cannot recover swap", fields: { error: "swap record is incomplete; check the wallet by hand" } });
       return { payment: failed, stop: true, note: "needs a person: swap record incomplete" };
     }
-    const st = await this.fx.status(p.rfqId, claimToken);
-    if (st.status === "filled" && st.txHash) {
-      const buy = st.buyAmount ?? quote?.buyAmount ?? p.amount;
-      const sell = st.sellAmount ?? quote?.takerPays ?? p.usdtSpent!;
-      this.ledger.recordWalletTx(st.txHash, "swap", p.id); // ours, even though we learned the hash from Textile
+    const r = await rail.recover({ ref: p.rfqId, claim, buyToken: TOKENS[p.currency].address, minOut: p.fxMinOut, usdtIn: p.usdtSpent, fromBlock: p.swapFromBlock });
+    if (r.status === "filled") {
+      this.ledger.recordWalletTx(r.txHash, "swap", p.id); // ours, even though we learned the hash afterwards
       return {
         payment: this.ledger.transition(p, "SWAPPED", {
-          detail: `recovered: ${st.txHash}`,
-          fields: { swapTx: st.txHash, rfqClaim: null },
-          book: { kind: "fx_conversion", txHash: st.txHash, postings: fxConversionPostings(sell, buy), memo: `Textile ${p.rfqId} (recovered)` },
+          detail: `recovered: ${r.txHash}`,
+          fields: { swapTx: r.txHash, rfqClaim: null },
+          book: { kind: "fx_conversion", txHash: r.txHash, postings: fxConversionPostings(r.usdtIn, r.out, p.currency as Exclude<Currency, "USDT">), memo: `${rail.name} ${p.rfqId} (recovered)` },
         }),
         note: "",
       };
     }
-    if (st.status === "expired" || st.status === "failed" || st.status === "no_quote") {
-      return { payment: this.ledger.transition(p, "CREATED", { detail: `Textile says ${st.status}; nothing moved`, fields: { rfqClaim: null } }), stop: true, note: `swap ${st.status}; will retry next run` };
+    if (r.status === "not_filled") {
+      return { payment: this.ledger.transition(p, "CREATED", { detail: `${r.reason}; nothing moved`, fields: { rfqClaim: null } }), stop: true, note: `swap not filled (${r.reason}); will retry next run` };
     }
-    return { payment: p, stop: true, note: `swap still ${st.status} at Textile; check again next run` };
+    if (r.status === "pending") return { payment: p, stop: true, note: `swap still pending (${r.reason}); check again next run` };
+    // not_seen: wait for confirmations before deciding it never happened.
+    const now = await this.wallet.blockNumber();
+    if (now < p.swapFromBlock + this.opts.settleBlocks) {
+      return { payment: p, stop: true, note: `swap not seen yet (block ${now}, waiting until ${p.swapFromBlock + this.opts.settleBlocks}); not resending` };
+    }
+    return { payment: this.ledger.transition(p, "CREATED", { detail: `no swap seen after block ${p.swapFromBlock}; safe to retry`, fields: { rfqClaim: null } }), stop: true, note: "swap never landed; will retry next run" };
   }
 
   private async releaseStaleQuote(p: Payment): Promise<Payment> {
-    const claim = this.ledger.rfqClaim(p.id);
-    if (p.rfqId && claim) await this.fx.cancel(p.rfqId, claim).catch(() => {});
+    if (p.rfqId && p.currency !== "USDT") await this.rail(p).release(p.rfqId, this.ledger.rfqClaim(p.id));
     return this.ledger.transition(p, "CREATED", { detail: "stale quote released", fields: { rfqClaim: null } });
   }
 
