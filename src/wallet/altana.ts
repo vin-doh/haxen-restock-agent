@@ -52,9 +52,10 @@ export interface AgentWallet {
 
 export const BLOCKING_CODES = new Set(["spend_limit_exceeded", "call_not_permitted", "session_expired"]);
 
-export function makeAltanaClient(attributionCode: string) {
+export function makeAltanaClient(attributionCode: string, rpcUrl = process.env.CELO_RPC_URL || "https://forno.celo.org") {
   return createClient({
-    chains: [CELO],
+    // Celo's own RPC for the SDK's chain reads; the SDK's default public endpoint timed out on us once.
+    chains: [{ ...CELO, publicRpcUrl: rpcUrl }],
     // Every transaction carries "altana,<our code>" as an ERC-8021 suffix, so Celo credits it to this entry.
     appCode: [attributionCode],
     agentIdentity: {
