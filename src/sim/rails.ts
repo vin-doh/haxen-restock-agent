@@ -1,13 +1,14 @@
 // Test doubles for the wallet, Textile and the chain. They behave like the real things in the
 // ways the payment flow depends on, and let tests inject crashes at exact points.
 import type { Address, Hex } from "viem";
-import { decodeFunctionData, encodeFunctionData, erc20Abi } from "viem";
-import { CONTRACTS, TOKENS, type TokenSymbol } from "../src/config.ts";
-import type { FirmQuote, RfqStatus, TextileClient } from "../src/fx/textile.ts";
-import type { ChainReader } from "../src/payments/reconcile.ts";
-import { type AgentWallet, type Call, WalletBlockedError, WalletFailedError } from "../src/wallet/altana.ts";
+import { decodeFunctionData, encodeFunctionData, erc20Abi, keccak256, toHex } from "viem";
+import { CONTRACTS, TOKENS, type TokenSymbol } from "../config.ts";
+import type { FirmQuote, RfqStatus, TextileClient } from "../fx/textile.ts";
+import type { ChainReader } from "../payments/reconcile.ts";
+import { type AgentWallet, type Call, WalletBlockedError, WalletFailedError } from "../wallet/altana.ts";
 
-export const hash = (n: number): Hex => `0x${n.toString(16).padStart(64, "0")}` as Hex;
+/** Simulated transaction hash: deterministic, looks like a real one, never a real transaction. */
+export const hash = (n: number): Hex => keccak256(toHex(`haxen-restock-sim:${n}`));
 export const WALLET = "0x1111111111111111111111111111111111111111" as Address;
 export const SUPPLIER = "0x2222222222222222222222222222222222222222" as Address;
 export const MAKER = "0x3333333333333333333333333333333333333333" as Address;
@@ -144,7 +145,7 @@ export class FakeTextile {
 
   async firmQuoteForExactOutput(p: { taker: Address; sellToken: Address; buyToken: Address; buyAmount: bigint }): Promise<FirmQuote> {
     if (this.noQuote) {
-      const { NoQuoteError } = await import("../src/fx/textile.ts");
+      const { NoQuoteError } = await import("../fx/textile.ts");
       throw new NoQuoteError("no_makers_online");
     }
     const sell = (p.buyAmount + this.rateNgnPerUsd - 1n) / this.rateNgnPerUsd; // both 6 decimals

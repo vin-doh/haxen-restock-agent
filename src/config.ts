@@ -1,6 +1,5 @@
 // Chain constants and environment settings. Addresses are Celo mainnet (42220),
 // checked against the Textile FX address book and the Celo docs (Nov 2026).
-import { readFileSync, existsSync } from "node:fs";
 import type { Address, Hex } from "viem";
 
 export const CELO_CHAIN_ID = 42220;
@@ -21,17 +20,6 @@ export const CONTRACTS = {
 } as const;
 
 export const TEXTILE_API = "https://api.textilecredit.com/v2";
-
-/** Loads KEY=VALUE lines from .env into process.env (without overriding real env vars). */
-export function loadDotEnv(path = ".env"): void {
-  if (!existsSync(path)) return;
-  for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
-    const m = /^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/.exec(line);
-    if (!m || line.trimStart().startsWith("#")) continue;
-    const [, key, raw] = m as unknown as [string, string, string];
-    if (process.env[key] === undefined) process.env[key] = raw.replace(/^["']|["']$/g, "");
-  }
-}
 
 export type Settings = {
   attributionCode: string;

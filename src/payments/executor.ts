@@ -175,7 +175,11 @@ export class PaymentExecutor {
         book: { kind: "fx_conversion", txHash, postings: fxConversionPostings(quote.takerPays, quote.buyAmount), memo: `Textile ${quote.rfqId}` },
       });
     } catch (e) {
-      if (e instanceof WalletBlockedError) throw e;
+      if (e instanceof WalletBlockedError) {
+        // The chain refused before anything was sent: release the quote so the maker isn't left holding it.
+        await this.fx.cancel(quote.rfqId, quote.claimToken).catch(() => {});
+        throw e;
+      }
       // We don't know for sure whether the swap landed; recovery asks Textile.
       this.opts.log(`${p.purchaseOrderId}: swap did not confirm (${(e as Error).message}); checking with Textile`);
       const r = await this.recoverSwap(submitting, quote.claimToken, quote);
@@ -193,6 +197,7 @@ export class PaymentExecutor {
     if (st.status === "filled" && st.txHash) {
       const buy = st.buyAmount ?? quote?.buyAmount ?? p.amount;
       const sell = st.sellAmount ?? quote?.takerPays ?? p.usdtSpent!;
+      this.ledger.recordWalletTx(st.txHash, "swap", p.id); // ours, even though we learned the hash from Textile
       return {
         payment: this.ledger.transition(p, "SWAPPED", {
           detail: `recovered: ${st.txHash}`,
@@ -244,6 +249,8 @@ export class PaymentExecutor {
   }
 
   private booked(p: Payment, txHash: Hex): Payment {
+    // Recorded here too, so a transfer found after a dropped connection still counts as ours (its relay fee included).
+    this.ledger.recordWalletTx(txHash, "supplier_payment", p.id);
     return this.ledger.transition(p, "PAID", {
       detail: txHash,
       fields: { payTx: txHash },

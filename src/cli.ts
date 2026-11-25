@@ -10,14 +10,16 @@
 //   owner:resume <paymentId>   Put a BLOCKED payment back in line.
 import { parseArgs } from "node:util";
 import { privateKeyToAccount } from "viem/accounts";
-import { TOKENS, atomicToWhole, loadDotEnv, readSettings, requireKey, wholeToAtomic } from "./config.ts";
+import { TOKENS, atomicToWhole, readSettings, requireKey, wholeToAtomic } from "./config.ts";
+import { loadDotEnv } from "./env.ts";
 import { TextileClient } from "./fx/textile.ts";
 import { FileInventorySource, HaxenMedInventorySource, type InventorySource } from "./inventory/source.ts";
 import { Ledger } from "./ledger/ledger.ts";
 import { PaymentExecutor, resumeBlocked } from "./payments/executor.ts";
 import { reconcile, viemChainReader } from "./payments/reconcile.ts";
 import { planRestock, type PurchaseOrder } from "./planner.ts";
-import { AltanaAgentWallet, loadSession, makeAltanaClient, makePublicClient } from "./wallet/altana.ts";
+import { AltanaAgentWallet, makeAltanaClient, makePublicClient } from "./wallet/altana.ts";
+import { loadSession } from "./wallet/session-store.ts";
 import { grantAgentSession, ownerProofSigner, ownerWallet, revokeAgentSession } from "./wallet/owner.ts";
 
 loadDotEnv();

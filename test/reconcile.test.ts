@@ -4,7 +4,7 @@ import type { Hex } from "viem";
 import { ACCOUNTS, Ledger } from "../src/ledger/ledger.ts";
 import { PaymentExecutor } from "../src/payments/executor.ts";
 import { attributionNeedle, hasAttribution, reconcile } from "../src/payments/reconcile.ts";
-import { FakeChain, FakeTextile, FakeWallet, SUPPLIER, WALLET } from "./fakes.ts";
+import { FakeChain, FakeTextile, FakeWallet, SUPPLIER, WALLET } from "../src/sim/rails.ts";
 
 const CODE = "celo_test01";
 

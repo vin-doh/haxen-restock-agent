@@ -4,7 +4,7 @@ import type { Address } from "viem";
 import { ACCOUNTS, Ledger } from "../src/ledger/ledger.ts";
 import { PaymentExecutor, resumeBlocked } from "../src/payments/executor.ts";
 import type { PurchaseOrder } from "../src/planner.ts";
-import { FakeChain, FakeTextile, FakeWallet, SUPPLIER, WALLET, type WalletScript } from "./fakes.ts";
+import { FakeChain, FakeTextile, FakeWallet, SUPPLIER, WALLET, type WalletScript } from "../src/sim/rails.ts";
 
 const NGN = (n: number) => BigInt(n) * 1_000_000n;
 const USD = (n: number) => BigInt(Math.round(n * 1_000_000));
@@ -102,12 +102,13 @@ test("the owner's onchain cap stops the payment; after the owner resumes it, it 
   assert.equal(supplierBalance(chain), NGN(15_000));
 });
 
-test("a revoked session blocks the agent before anything moves", async () => {
-  const { chain, wallet, exec } = setup({ blockOn: { call: 1, code: "call_not_permitted" } });
+test("a revoked session blocks the agent before anything moves, and the quote is released", async () => {
+  const { chain, fx, wallet, exec } = setup({ blockOn: { call: 1, code: "call_not_permitted" } });
   const r = await exec.payOrder(order());
   assert.equal(r.payment.state, "BLOCKED");
   assert.equal(wallet.calls.length, 0);
   assert.equal(supplierBalance(chain), 0n);
+  assert.deepEqual(fx.cancelled, ["rfq_1"]);
 });
 
 test("local per-order limit: blocked before any transaction, quote released", async () => {

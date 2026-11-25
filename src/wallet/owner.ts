@@ -6,7 +6,8 @@ import type { Hex } from "viem";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { TOKENS } from "../config.ts";
 import type { ProofSigner } from "../fx/textile.ts";
-import { makeAltanaClient, restockPermissions, saveSession } from "./altana.ts";
+import { makeAltanaClient, restockPermissions } from "./altana.ts";
+import { saveSession } from "./session-store.ts";
 
 export function ownerWallet(ownerKey: Hex) {
   const signer = signerFromPrivateKey(ownerKey);

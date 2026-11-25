@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ACCOUNTS, Ledger, LedgerError, StaleStateError, fxConversionPostings } from "../src/ledger/ledger.ts";
-import { hash } from "./fakes.ts";
+import { hash } from "../src/sim/rails.ts";
 
 const newLedger = () => new Ledger(":memory:");
 const order = { purchaseOrderId: "po_1", supplierId: "sup", supplierAddress: "0x2222222222222222222222222222222222222222", currency: "cNGN" as const, amount: 15_000_000_000n };

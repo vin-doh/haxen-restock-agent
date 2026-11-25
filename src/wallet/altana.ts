@@ -7,16 +7,11 @@
 import {
   CELO,
   createClient,
-  deserializeSession,
   isAltanaError,
-  serializeSession,
-  signerFromPrivateKey,
   type Session,
 } from "@altananetwork/sdk";
 import { createPublicClient, encodeFunctionData, erc20Abi, http, parseAbiItem, type Address, type Hex, type PublicClient } from "viem";
 import { celo } from "viem/chains";
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
-import { dirname } from "node:path";
 import { CONTRACTS, TOKENS } from "../config.ts";
 
 export type Call = { to: Address; data: Hex; value?: bigint };
@@ -123,18 +118,6 @@ export const TRANSFER_EVENT = parseAbiItem("event Transfer(address indexed from,
 
 export function transferCall(token: Address, to: Address, amount: bigint): Call {
   return { to: token, data: encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [to, amount] }) };
-}
-
-// ---------- session storage (the session key itself stays in .env, never in this file) ----------
-
-export function saveSession(path: string, session: Session): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(serializeSession(session), null, 2));
-}
-
-export function loadSession(path: string, sessionKey: Hex): Session {
-  if (!existsSync(path)) throw new Error(`No session at ${path}. The owner runs "owner:grant" first.`);
-  return deserializeSession(JSON.parse(readFileSync(path, "utf8")), signerFromPrivateKey(sessionKey));
 }
 
 /**

@@ -14,3 +14,10 @@ state/
 
 # Private working notes
 submission-draft.md
+
+# Next.js
+.next/
+next-env.d.ts
+.vercel
+*.tsbuildinfo
+.claude/
