@@ -8,8 +8,10 @@
 //   owner:revoke               Revoke the agent's session key in one transaction.
 //   owner:identity             Register (or re-register) the agent's ERC-8004 identity.
 //   owner:resume <paymentId>   Put a BLOCKED payment back in line.
+//   wallet                     Read-only: the wallet address, its CELO, USD₮ and GHSm, and whether it has acted onchain.
 import { parseArgs } from "node:util";
 import { privateKeyToAccount } from "viem/accounts";
+import { erc20Abi } from "viem";
 import { TOKENS, atomicToWhole, readSettings, requireKey, wholeToAtomic } from "./config.ts";
 import { loadDotEnv } from "./env.ts";
 import { TextileClient } from "./fx/textile.ts";
@@ -108,6 +110,22 @@ async function main(): Promise<void> {
       return;
     }
 
+    case "wallet": {
+      // Read-only. Uses the owner key only to derive the public address.
+      const address = privateKeyToAccount(requireKey("OWNER_PRIVATE_KEY")).address;
+      const chain = makePublicClient(settings.rpcUrl);
+      const [celoWei, nonce, code] = await Promise.all([chain.getBalance({ address }), chain.getTransactionCount({ address }), chain.getCode({ address })]);
+      log(`Wallet ${address}`);
+      log(`  CELO  ${atomicToWhole(celoWei, 18)}`);
+      for (const t of ["USDT", "GHSm", "cNGN"] as const) {
+        const bal = (await chain.readContract({ address: TOKENS[t].address, abi: erc20Abi, functionName: "balanceOf", args: [address] })) as bigint;
+        log(`  ${t.padEnd(5)} ${atomicToWhole(bal, TOKENS[t].decimals)}`);
+      }
+      log(`  transactions sent: ${nonce}; smart account active: ${code && code !== "0x" ? "yes" : "not yet"}`);
+      log(`  https://celoscan.io/address/${address}`);
+      return;
+    }
+
     case "status": {
       const ledger = new Ledger(settings.dbPath);
       try {
@@ -191,7 +209,7 @@ async function main(): Promise<void> {
     }
 
     default:
-      log("Commands: plan, run [--yes], status, reconcile [--from-block N], owner:grant, owner:revoke, owner:identity, owner:resume <id>");
+      log("Commands: plan, run [--yes], status, wallet, reconcile [--from-block N], owner:grant, owner:revoke, owner:identity, owner:resume <id>");
       if (command) process.exitCode = 1;
   }
 }

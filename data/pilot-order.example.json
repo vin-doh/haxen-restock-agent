@@ -1,0 +1,18 @@
+{
+  "pharmacy": "PILOT PHARMACY NAME, TOWN",
+  "takenAt": "2026-11-26T08:00:00Z",
+  "suppliers": [
+    {
+      "id": "sup_pilot",
+      "name": "SUPPLIER NAME, TOWN",
+      "country": "GH",
+      "currency": "GHSm",
+      "payoutAddress": "0x000000000000000000000000000000000000dEaD",
+      "leadTimeDays": 2
+    }
+  ],
+  "items": [
+    { "sku": "ORS-SACHET", "name": "ORS sachet", "stock": 2, "reorderLevel": 4, "dailySales": 0.2, "supplierId": "sup_pilot", "unitPrice": "2.50", "packSize": 4 },
+    { "sku": "PCM-500-STRIP", "name": "Paracetamol 500mg strip", "stock": 1, "reorderLevel": 3, "dailySales": 0.1, "supplierId": "sup_pilot", "unitPrice": "3.00", "packSize": 5 }
+  ]
+}
