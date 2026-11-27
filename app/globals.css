@@ -96,6 +96,7 @@ ul.clean li { margin: 4px 0; }
 
 /* demo */
 .demo { display: grid; gap: 18px; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); align-items: start; }
+.demo > * { min-width: 0; }
 @media (max-width: 860px) { .demo { grid-template-columns: 1fr; } }
 .panel { position: sticky; top: 76px; }
 @media (max-width: 860px) { .panel { position: static; } }
@@ -128,7 +129,19 @@ td.num { text-align: right; font-family: var(--mono); white-space: nowrap; }
 .states { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0; }
 .states .arrow { color: var(--muted); font-size: 12px; }
 .big { font-size: 28px; font-weight: 800; letter-spacing: -0.01em; }
-.stats { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+.stats { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.stats > * { min-width: 0; }
+.big { overflow-wrap: anywhere; }
 
 footer { border-top: 1px solid var(--border); margin-top: 40px; padding: 24px 0 40px; color: var(--muted); font-size: 14px; }
 .empty { color: var(--muted); font-size: 15px; padding: 24px; text-align: center; border: 1px dashed var(--border); border-radius: var(--radius); }
+
+/* Telegram-style approval bubble */
+.tg { background: var(--surface-2); border-radius: 12px; padding: 14px; display: grid; gap: 10px; }
+.tg-bubble { background: var(--surface); border: 1px solid var(--border); border-radius: 14px 14px 14px 4px; padding: 10px 12px; max-width: 520px; font-size: 14px; }
+.tg-from { color: var(--info); font-weight: 700; font-size: 13px; margin-bottom: 4px; }
+.tg-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 10px; }
+.tg-btn { text-align: center; padding: 7px; border-radius: 8px; background: var(--surface-2); font-weight: 600; font-size: 13px; color: var(--muted); }
+.tg-picked { background: var(--brand); color: var(--brand-ink); }
+.tg-reply { justify-self: end; background: var(--ok-bg); color: var(--ok); border-radius: 14px 14px 4px 14px; padding: 7px 12px; font-size: 13px; font-weight: 600; }
+.timeline li > span { min-width: 0; overflow-wrap: anywhere; }

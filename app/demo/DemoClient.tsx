@@ -10,6 +10,7 @@ type Result = {
   rateIsLive: boolean;
   orders: Array<{ id: string; supplier: string; total: string; lines: Array<{ name: string; qty: number; reason: string; lineTotal: string }> }>;
   steps: Array<{ kind: string; text: string; tx?: string }>;
+  approvals: Array<{ order: string; message: string; decision: "approved" | "declined" }>;
   payments: Array<{ id: string; order: string; state: string; amount: string; usdtSpent: string | null; swapTx: string | null; payTx: string | null; error: string | null; events: Array<{ from: string | null; to: string; detail: string | null }> }>;
   ledger: Array<{ account: string; currency: string; balance: string }>;
   reconcile: { findings: Finding[]; balances: Array<{ currency: string; ledger: string; chain: string }> };
@@ -25,6 +26,7 @@ const SCENARIOS: Array<[string, string, string]> = [
   ["transfer_lost", "The payment never lands", "The agent waits for confirmations, sees nothing, then pays once."],
   ["cap_hit", "Owner's daily cap too small", "The chain refuses; the payment stops until the owner acts."],
   ["revoked", "Owner revoked the agent", "Every call is refused. Nothing moves."],
+  ["owner_declined", "Owner taps Don't pay", "The owner says no on Telegram. Nothing is quoted or sent."],
 ];
 
 const stateClass = (s: string) =>
@@ -134,7 +136,7 @@ function ResultView({ r }: { r: Result }) {
   const errors = r.reconcile.findings.filter((f) => f.level === "error").length;
   const match = r.reconcile.balances.every((b) => b.ledger === b.chain);
   return (
-    <div style={{ display: "grid", gap: 16 }}>
+    <div style={{ display: "grid", gap: 16, gridTemplateColumns: "minmax(0, 1fr)" }}>
       <div className="stats">
         <div className="card"><div style={{ color: "var(--muted)", fontSize: 13 }}>Supplier received</div><div className="big">{r.supplierReceived}</div></div>
         <div className="card"><div style={{ color: "var(--muted)", fontSize: 13 }}>Transactions sent</div><div className="big">{r.transactionsSent}</div></div>
@@ -143,6 +145,24 @@ function ResultView({ r }: { r: Result }) {
           <div className="big" style={{ color: match && errors === 0 ? "var(--ok)" : "var(--err)" }}>{match && errors === 0 ? "Match" : "Mismatch"}</div>
         </div>
       </div>
+
+      {r.approvals.map((a) => (
+        <div key={a.order} className="card">
+          <h3>The owner&apos;s phone: Telegram</h3>
+          <div className="tg">
+            <div className="tg-bubble">
+              <div className="tg-from">HaxenMed Restock Agent</div>
+              <div style={{ whiteSpace: "pre-wrap" }}>{a.message}</div>
+              <div className="tg-buttons">
+                <span className={a.decision === "approved" ? "tg-btn tg-picked" : "tg-btn"}>✅ Pay</span>
+                <span className={a.decision === "declined" ? "tg-btn tg-picked" : "tg-btn"}>❌ Don&apos;t pay</span>
+              </div>
+            </div>
+            <div className="tg-reply">{a.decision === "approved" ? "Owner tapped ✅ Pay" : "Owner tapped ❌ Don't pay"}</div>
+          </div>
+          <p style={{ color: "var(--muted)", fontSize: 13, margin: "8px 0 0" }}>Simulated here. With APPROVAL=telegram the agent sends this to the owner and waits; only the owner&apos;s own Telegram account can answer.</p>
+        </div>
+      ))}
 
       {r.orders.length === 0 && <div className="empty">Nothing is at or below its reorder point, so the agent orders nothing.</div>}
       {r.orders.map((o) => (

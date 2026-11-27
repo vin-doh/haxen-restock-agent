@@ -32,6 +32,13 @@ The pharmacy owner does, at all times, and the chain enforces it.
   - act until an **expiry**
 - **Revoking** the key is one transaction (`owner:revoke`). After that, the chain refuses every call the agent makes.
 - On top of the onchain cap, the agent applies its own **per-order and per-run limits** and stops before it quotes anything larger.
+- **The owner approves each order on Telegram** (with `APPROVAL=telegram`). Before a new order is paid, the agent sends the owner the items, supplier and total, with ✅ Pay / ❌ Don't pay buttons, and waits:
+  - only a press from the owner's own Telegram account counts
+  - each request carries a one-time code, so an old or forwarded button can't approve a new order
+  - no answer before the deadline means no payment
+  - the decision is stored per order and written into the payment's audit trail, so a re-run never asks twice
+
+  Set-up: create a bot with @BotFather and put `TELEGRAM_BOT_TOKEN` in `.env`. Send `/start` to the bot, run `npm run agent -- telegram:whoami`, and put your id in `TELEGRAM_OWNER_CHAT_ID`. Then check it with `npm run agent -- telegram:test`.
 
 ## How it handles money safely
 

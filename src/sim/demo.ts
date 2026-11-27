@@ -10,6 +10,7 @@ import { reconcile, type Finding } from "../payments/reconcile.ts";
 import { planRestock, type PurchaseOrder } from "../planner.ts";
 import { FakeChain, FakeMento, FakeTextile, FakeWallet, WALLET, type WalletScript } from "./rails.ts";
 import { MentoRail } from "../fx/mento.ts";
+import { orderSummary } from "../approval/approver.ts";
 import sample from "../../data/sample-inventory.json" with { type: "json" };
 
 export const SCENARIOS = {
@@ -19,6 +20,7 @@ export const SCENARIOS = {
   transfer_lost: "The supplier payment never reaches the chain",
   cap_hit: "The owner's onchain daily cap is too small for the payment",
   revoked: "The owner revoked the agent's session key",
+  owner_declined: "The owner taps Don't pay on Telegram",
 } as const;
 export type Scenario = keyof typeof SCENARIOS;
 
@@ -44,6 +46,8 @@ export type DemoResult = {
   ghsPerUsd: number;
   orders: Array<{ id: string; supplier: string; total: string; lines: Array<{ name: string; qty: number; reason: string; lineTotal: string }> }>;
   steps: DemoStep[];
+  /** The Telegram message the owner would get, and what they answered (simulated). */
+  approvals: Array<{ order: string; message: string; decision: "approved" | "declined" }>;
   payments: Array<{ id: string; order: string; state: string; amount: string; usdtSpent: string | null; swapTx: string | null; payTx: string | null; error: string | null; events: Array<{ from: string | null; to: string; detail: string | null }> }>;
   ledger: Array<{ account: string; currency: string; balance: string }>;
   reconcile: { findings: Finding[]; balances: Array<{ currency: string; ledger: string; chain: string }> };
@@ -103,8 +107,18 @@ export async function runDemo(input: DemoInput): Promise<DemoResult> {
     });
 
     let sentBefore = 0;
+    const approvals: DemoResult["approvals"] = [];
     for (const o of orders) {
-      const r = await exec.payOrder(o);
+      // The owner decides first, exactly as the agent does with APPROVAL=telegram (simulated here).
+      const message = `${orderSummary(o, snapshot.pharmacy)}\n\nPay this order?`;
+      const decision = input.scenario === "owner_declined" ? "declined" : "approved";
+      approvals.push({ order: o.id, message, decision });
+      say("owner", `Asked the owner on Telegram to approve ${o.id} (${fmt(o.total, o.supplier.currency)}). The owner tapped ${decision === "approved" ? "✅ Pay" : "❌ Don't pay"} (simulated).`);
+      if (decision === "declined") {
+        say("result", `${o.id}: not paid. The owner declined, so nothing was quoted or sent.`);
+        continue;
+      }
+      const r = await exec.payOrder(o, "approved by the owner via Telegram (simulated)");
       for (const c of wallet.calls.slice(sentBefore)) say("chain", `Sent "${c.label}" (simulated tx)`, c.tx);
       sentBefore = wallet.calls.length;
       say("result", `${o.id}: ${r.payment.state}${r.note && r.note.toUpperCase() !== r.payment.state ? `. ${r.note}` : ""}`);
@@ -161,6 +175,7 @@ export async function runDemo(input: DemoInput): Promise<DemoResult> {
         findings: report.findings,
         balances: report.balances.map((b) => ({ currency: b.currency, ledger: fmt(b.ledger, b.currency), chain: fmt(b.chain, b.currency) })),
       },
+      approvals,
       supplierReceived: fmt(await chain.balance("GHSm", SIM_SUPPLIER), "GHSm"),
       transactionsSent: wallet.calls.length,
     };

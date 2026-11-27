@@ -9,7 +9,12 @@ for (const scenario of Object.keys(SCENARIOS) as Scenario[]) {
     const r = await runDemo({ scenario, attributionCode: CODE, ghsPerUsd: 11.73 });
     assert.ok(r.orders.length >= 1);
     const total = r.orders[0]!.total;
-    if (scenario === "revoked") {
+    if (scenario === "owner_declined") {
+      assert.equal(r.supplierReceived, "0 GHSm");
+      assert.equal(r.payments.length, 0, "a declined order never becomes a payment");
+      assert.equal(r.transactionsSent, 0);
+      assert.equal(r.approvals[0]!.decision, "declined");
+    } else if (scenario === "revoked") {
       assert.equal(r.supplierReceived, "0 GHSm");
       assert.equal(r.payments[0]!.state, "BLOCKED");
       assert.equal(r.transactionsSent, 0);

@@ -8,6 +8,8 @@
 //   owner:revoke               Revoke the agent's session key in one transaction.
 //   owner:identity             Register (or re-register) the agent's ERC-8004 identity.
 //   owner:resume <paymentId>   Put a BLOCKED payment back in line.
+//   telegram:whoami            Setup: list who has messaged your bot (to find your owner chat id).
+//   telegram:test              Send a test message to the owner.
 //   wallet                     Read-only: the wallet address, its CELO, USD₮ and GHSm, and whether it has acted onchain.
 import { parseArgs } from "node:util";
 import { privateKeyToAccount } from "viem/accounts";
@@ -28,6 +30,8 @@ import { reconcile, viemChainReader } from "./payments/reconcile.ts";
 import { planRestock, type PurchaseOrder } from "./planner.ts";
 import { AltanaAgentWallet, makeAltanaClient, makePublicClient } from "./wallet/altana.ts";
 import { loadSession } from "./wallet/session-store.ts";
+import { CliApprover, decide, storedDecision, type Approver } from "./approval/approver.ts";
+import { TelegramApprover, TelegramClient, recentChats } from "./approval/telegram.ts";
 import { grantAgentSession, ownerProofSigner, ownerWallet, revokeAgentSession } from "./wallet/owner.ts";
 
 loadDotEnv();
@@ -56,6 +60,16 @@ function inventory(): InventorySource {
     return new HaxenMedInventorySource(settings.haxenmedUrl, settings.haxenmedApiKey, JSON.parse(readFileSync(SUPPLIER_WALLETS, "utf8")) as SupplierWallets);
   }
   return new FileInventorySource("data/sample-inventory.json");
+}
+
+/** APPROVAL=telegram asks the owner on Telegram before each new order; otherwise --yes counts as the owner's approval. */
+function makeApprover(): Approver {
+  if ((process.env.APPROVAL ?? "cli") !== "telegram") return new CliApprover();
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const owner = process.env.TELEGRAM_OWNER_CHAT_ID;
+  if (!token || !owner) throw new Error("APPROVAL=telegram needs TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_CHAT_ID in .env (see README)");
+  const minutes = Number(process.env.APPROVAL_WAIT_MINUTES ?? "15");
+  return new TelegramApprover(new TelegramClient(token), owner, { waitMs: minutes * 60_000 });
 }
 
 function today(): string {
@@ -104,14 +118,47 @@ async function main(): Promise<void> {
           const r = await exec.advance(p);
           log(`${p.purchaseOrderId}: ${r.payment.state} ${r.note}`);
         }
+        const approver = makeApprover();
         for (const o of orders) {
-          const r = await exec.payOrder(o);
+          if (!ledger.getByOrder(o.id)) {
+            // New order: the owner decides first (Telegram, or --yes at the command line).
+            log(`${o.id}: asking the owner via ${approver.via}…`);
+            const d = await decide(ledger, approver, o, snap.pharmacy);
+            if (d.decision !== "approved") {
+              log(`${o.id}: ${d.decision === "declined" ? "declined by the owner" : "no answer in time"}; not paid`);
+              continue;
+            }
+            log(`${o.id}: approved by ${d.by ?? "owner"} via ${d.via} at ${d.at}`);
+          }
+          const d = storedDecision(ledger, o.id);
+          const r = await exec.payOrder(o, d ? `approved by ${d.by ?? "owner"} via ${d.via} at ${d.at}` : undefined);
           log(`${o.id}: ${r.payment.state} ${r.note}`);
+          if (approver instanceof TelegramApprover) {
+            await approver.notify(r.payment.state === "PAID" ? `Paid ${o.id}: https://celoscan.io/tx/${r.payment.payTx}` : `${o.id}: ${r.payment.state}. ${r.note}`);
+          }
         }
       } finally {
         ledger.close();
       }
       return;
+    }
+
+    case "telegram:whoami": {
+      // Setup: send /start to your bot from your own Telegram, then run this to see your numeric id.
+      const token = process.env.TELEGRAM_BOT_TOKEN;
+      if (!token) throw new Error("Put TELEGRAM_BOT_TOKEN in .env first (from @BotFather)");
+      const chats = await recentChats(new TelegramClient(token));
+      if (!chats.length) return log("No messages yet. Open your bot in Telegram, send /start, then run this again.");
+      for (const c of chats) log(`${c.id}  ${c.name}`);
+      log("Put your own id in .env as TELEGRAM_OWNER_CHAT_ID.");
+      return;
+    }
+
+    case "telegram:test": {
+      const a = makeApprover();
+      if (!(a instanceof TelegramApprover)) throw new Error("Set APPROVAL=telegram (and the two TELEGRAM_ values) in .env first");
+      await a.notify("HaxenMed Restock Agent is connected. You'll get a Pay / Don't pay message before each order.");
+      return log("Test message sent.");
     }
 
     case "wallet": {
@@ -213,7 +260,7 @@ async function main(): Promise<void> {
     }
 
     default:
-      log("Commands: plan, run [--yes], status, wallet, reconcile [--from-block N], owner:grant, owner:revoke, owner:identity, owner:resume <id>");
+      log("Commands: plan, run [--yes], status, wallet, telegram:whoami, telegram:test, reconcile [--from-block N], owner:grant, owner:revoke, owner:identity, owner:resume <id>");
       if (command) process.exitCode = 1;
   }
 }

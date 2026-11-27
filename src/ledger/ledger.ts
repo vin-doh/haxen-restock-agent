@@ -225,7 +225,7 @@ export class Ledger {
    * The purchase order id is the idempotency key: retries never create a second payment.
    * If the same order id comes back with different details, that is an error, not a new payment.
    */
-  createPayment(p: { purchaseOrderId: string; supplierId: string; supplierAddress: string; currency: Currency; amount: bigint }): { payment: Payment; created: boolean } {
+  createPayment(p: { purchaseOrderId: string; supplierId: string; supplierAddress: string; currency: Currency; amount: bigint; approval?: string }): { payment: Payment; created: boolean } {
     if (p.amount <= 0n) throw new LedgerError("Payment amount must be positive");
     return this.tx(() => {
       const existing = this.getByOrder(p.purchaseOrderId);
@@ -243,7 +243,7 @@ export class Ledger {
            VALUES (?, ?, ?, ?, ?, ?, 'CREATED', 0, ?, ?)`,
         )
         .run(id, p.purchaseOrderId, p.supplierId, p.supplierAddress, p.currency, p.amount.toString(), at, at);
-      this.db.prepare("INSERT INTO payment_events (payment_id, from_state, to_state, detail, at) VALUES (?, NULL, 'CREATED', ?, ?)").run(id, "order approved", at);
+      this.db.prepare("INSERT INTO payment_events (payment_id, from_state, to_state, detail, at) VALUES (?, NULL, 'CREATED', ?, ?)").run(id, p.approval ?? "order approved", at);
       return { payment: this.get(id)!, created: true };
     });
   }

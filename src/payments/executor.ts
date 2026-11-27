@@ -43,7 +43,8 @@ export class PaymentExecutor {
   }
 
   /** Creates (or finds) the payment for an order and drives it as far as it can go. */
-  async payOrder(order: PurchaseOrder): Promise<Outcome> {
+  /** `approval` says who approved the order and how; it becomes the payment's first audit event. */
+  async payOrder(order: PurchaseOrder, approval?: string): Promise<Outcome> {
     if (isUnspendable(order.supplier.payoutAddress)) throw new Error(`${order.id}: supplier ${order.supplier.id} has a zero/burn payout address; refusing to pay`);
     const { payment, created } = this.ledger.createPayment({
       purchaseOrderId: order.id,
@@ -51,6 +52,7 @@ export class PaymentExecutor {
       supplierAddress: order.supplier.payoutAddress,
       currency: order.supplier.currency,
       amount: order.total,
+      approval,
     });
     if (!created) this.opts.log(`${order.id}: already known (${payment.state}), resuming`);
     return this.advance(payment);
