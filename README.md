@@ -57,6 +57,37 @@ The tests in `test/` cover each of these against a simulated Mento, wallet and c
 
 The code also includes a Textile FX rail for suppliers paid in naira (cNGN). It is off unless the owner grants a cNGN cap, and our pilot doesn't use it.
 
+### Addresses: ours vs. the contracts we call
+
+| | Address | Whose |
+|---|---|---|
+| Agent wallet (Altana, EIP-7702) | `0xa97a7C6c3ec143986E739805b5875a1FB0a97909` | **Ours.** Not yet funded; it has no transactions until the first mainnet run |
+| Mento Router | `0x4861840C2EfB2b98312B0aE34d86fD73E8f9B6f6` | Mento's, shared. Its transaction history is not ours |
+| GHSm (Mento Ghanaian Cedi) | `0xfAeA5F3404bbA20D3cc2f8C4B0A888F55a3c7313` | Mento's token |
+| USD₮ | `0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e` | Tether's token |
+| ERC-8004 Identity Registry | `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432` | Shared registry |
+
+## Live demo, for people and for agents
+
+The web app is at **https://haxen-restock-agent.vercel.app**. Its "Try a restock" page runs this repo's real planner, ledger, payment code and reconciler against a simulated Mento, wallet and chain, priced at Mento's live cedi rate. No real money moves.
+
+Agents and automated reviewers can call it directly. No key is needed; plain HTTP clients work:
+
+```sh
+# What the service is, what's live, and the endpoints
+curl https://haxen-restock-agent.vercel.app/api/health
+
+# The live Mento cedi rate and the failure scenarios you can run
+curl https://haxen-restock-agent.vercel.app/api/demo
+
+# Run a simulated restock; scenario is one of: normal, crash_after_swap,
+# crash_after_transfer, transfer_lost, cap_hit, revoked
+curl -X POST https://haxen-restock-agent.vercel.app/api/demo \
+  -H 'content-type: application/json' -d '{"scenario":"crash_after_swap"}'
+```
+
+The site is on Vercel. If an automated request ever gets HTTP 403, that is most likely Vercel's own screening of unfamiliar automated traffic, not this app: the app has no login, key or user-agent check. The same demo runs locally with `npm install && npm run dev`, then `http://localhost:3000/demo`.
+
 ## Running it
 
 Needs Node 22.18+ (24 recommended). TypeScript runs directly on Node, with no build step.
