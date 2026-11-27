@@ -86,10 +86,32 @@ test("no answer in time means not paid", async () => {
 
 test("a bad token is refused up front, and network errors never include the token", async () => {
   assert.throws(() => new TelegramClient("not-a-token"), TelegramError);
+  let tries = 0;
   const failing = (async () => {
-    throw new TypeError(`fetch failed for https://api.telegram.org/bot${TOKEN}/getUpdates`);
+    tries++;
+    throw Object.assign(new TypeError(`fetch failed for https://api.telegram.org/bot${TOKEN}/getUpdates`), { cause: { code: "ECONNRESET" } });
   }) as unknown as typeof fetch;
-  await assert.rejects(new TelegramClient(TOKEN, failing).getUpdates(0, 0), (e: Error) => !e.message.includes(TOKEN));
+  await assert.rejects(new TelegramClient(TOKEN, failing, { retryPauseMs: 1 }).getUpdates(0, 0), (e: Error) => !e.message.includes(TOKEN) && /3 tries: TypeError ECONNRESET/.test(e.message));
+  assert.equal(tries, 3, "a network failure is retried twice");
+});
+
+test("one dropped connection is retried and the call succeeds; a Telegram error answer is not retried", async () => {
+  let n = 0;
+  const flaky = (async () => {
+    n++;
+    if (n === 1) throw new TypeError("fetch failed");
+    return new Response(JSON.stringify({ ok: true, result: { message_id: 5 } }), { status: 200 });
+  }) as unknown as typeof fetch;
+  const r = await new TelegramClient(TOKEN, flaky, { retryPauseMs: 1 }).call<{ message_id: number }>("sendMessage", {});
+  assert.equal(r.message_id, 5);
+  assert.equal(n, 2);
+  let m = 0;
+  const refusing = (async () => {
+    m++;
+    return new Response(JSON.stringify({ ok: false, description: "Forbidden: bot was blocked by the user" }), { status: 403 });
+  }) as unknown as typeof fetch;
+  await assert.rejects(new TelegramClient(TOKEN, refusing, { retryPauseMs: 1 }).call("sendMessage", {}), /blocked by the user/);
+  assert.equal(m, 1);
 });
 
 test("decide(): asks once per order; approved and declined are remembered, a timeout asks again", async () => {

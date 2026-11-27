@@ -22,25 +22,37 @@ export class TelegramError extends Error {}
 export class TelegramClient {
   private readonly token: string;
   private readonly fetchFn: typeof fetch;
-  constructor(token: string, fetchFn: typeof fetch = fetch) {
+  private readonly retryPauseMs: number;
+  constructor(token: string, fetchFn: typeof fetch = fetch, opts: { retryPauseMs?: number } = {}) {
+    this.retryPauseMs = opts.retryPauseMs ?? 2_000;
     if (!/^\d+:[A-Za-z0-9_-]{20,}$/.test(token)) throw new TelegramError("TELEGRAM_BOT_TOKEN doesn't look like a bot token from @BotFather");
     this.token = token;
     this.fetchFn = fetchFn;
   }
 
+  /**
+   * Calls the Bot API. A network failure (no answer at all) is retried twice with a short pause;
+   * an answer from Telegram, even an error, is never retried.
+   */
   async call<T>(method: string, params: Record<string, unknown> = {}, timeoutMs = 20_000): Promise<T> {
-    let res: Response;
-    try {
-      res = await this.fetchFn(`https://api.telegram.org/bot${this.token}/${method}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(params),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-    } catch (e) {
-      // Never let the URL (which contains the token) reach an error message.
-      throw new TelegramError(`Telegram ${method} failed: ${(e as Error).name}`);
+    let res: Response | undefined;
+    let lastNetworkError = "";
+    for (let attempt = 0; attempt < 3 && !res; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, this.retryPauseMs * attempt));
+      try {
+        res = await this.fetchFn(`https://api.telegram.org/bot${this.token}/${method}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(params),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (e) {
+        // Never let the URL (which contains the token) reach an error message: keep only the error kind and code.
+        const cause = (e as { cause?: { code?: string } }).cause?.code;
+        lastNetworkError = `${(e as Error).name}${cause ? ` ${cause}` : ""}`;
+      }
     }
+    if (!res) throw new TelegramError(`Telegram ${method} failed after 3 tries: ${lastNetworkError}`);
     const json = (await res.json().catch(() => ({}))) as { ok?: boolean; result?: T; description?: string };
     if (!json.ok) throw new TelegramError(`Telegram ${method}: ${json.description ?? `HTTP ${res.status}`}`);
     return json.result as T;
